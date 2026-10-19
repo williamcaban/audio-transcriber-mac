@@ -11,5 +11,8 @@ build/
 .build/
 .swiftpm/
 
+# App bundle build output (scripts/bundle-app.sh)
+dist/
+
 # macOS
 .DS_Store
