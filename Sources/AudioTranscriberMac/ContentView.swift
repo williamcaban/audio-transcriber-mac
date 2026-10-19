@@ -7,12 +7,15 @@ struct ContentView: View {
     @State private var showExportError = false
     @State private var isDropTargeted = false
     @State private var showDetails = false
+    @State private var showSettings = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             header
+            if showSettings {
+                settingsSection
+            }
             dropZone
-            settingsCard
             actionBar
             statusBar
             transcriptCard
@@ -51,6 +54,18 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Spacer()
+
+            Button {
+                showSettings.toggle()
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(showSettings ? Color.accentColor : .secondary)
+            .help("Settings")
         }
     }
 
@@ -101,7 +116,7 @@ struct ContentView: View {
         }
     }
 
-    private var settingsCard: some View {
+    private var settingsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             backendRow
             if let caption = backendLoadCaption {
@@ -258,10 +273,14 @@ struct ContentView: View {
             .controlSize(.large)
             .disabled(viewModel.transcript.isEmpty)
 
-            Button {
-                exportMarkdown()
+            Menu {
+                ForEach(ExportFormat.allCases) { format in
+                    Button("\(format.rawValue) (.\(format.fileExtension))") {
+                        exportTranscript(as: format)
+                    }
+                }
             } label: {
-                Label("Export...", systemImage: "square.and.arrow.down")
+                Label("Export", systemImage: "square.and.arrow.down")
             }
             .controlSize(.large)
             .disabled(viewModel.transcript.isEmpty)
@@ -376,15 +395,22 @@ struct ContentView: View {
         pasteboard.setString(viewModel.transcript, forType: .string)
     }
 
-    private func exportMarkdown() {
+    // .docx already opens natively in Pages -- no separate Pages-specific
+    // export format needed to cover that case.
+    private func exportTranscript(as format: ExportFormat) {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.allowedContentTypes = [format.contentType]
         let baseName = viewModel.selectedFileURL?.deletingPathExtension().lastPathComponent ?? "transcript"
-        panel.nameFieldStringValue = "\(baseName).md"
+        panel.nameFieldStringValue = "\(baseName).\(format.fileExtension)"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try viewModel.transcript.write(to: url, atomically: true, encoding: .utf8)
+            switch format {
+            case .text, .markdown:
+                try viewModel.transcript.write(to: url, atomically: true, encoding: .utf8)
+            case .docx:
+                try DocxExporter.export(text: viewModel.transcript, to: url)
+            }
         } catch {
             showExportError = true
         }
