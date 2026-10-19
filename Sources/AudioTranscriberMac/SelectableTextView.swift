@@ -26,7 +26,7 @@ struct SelectableTextView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(
-            width: 0, height: .greatestFiniteMagnitude
+            width: 0, height: CGFloat.greatestFiniteMagnitude
         )
 
         let scrollView = NSScrollView()
