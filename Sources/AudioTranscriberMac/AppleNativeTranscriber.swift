@@ -33,8 +33,8 @@ enum AppleNativeTranscriber {
         Array(await SpeechTranscriber.supportedLocales)
     }
 
-    static func transcribe(fileURL: URL, locale: Locale) async throws -> String {
-        guard await SpeechTranscriber.isAvailable else {
+    static func transcribe(fileURL: URL, locale: Locale) async throws -> (text: String, resolvedLocale: Locale) {
+        guard SpeechTranscriber.isAvailable else {
             throw AppleNativeTranscriberError.unavailable
         }
         guard let supportedLocale = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
@@ -64,9 +64,9 @@ enum AppleNativeTranscriber {
             return full
         }()
 
-        try await analyzer.analyzeSequence(from: audioFile)
+        _ = try await analyzer.analyzeSequence(from: audioFile)
         try await analyzer.finalizeAndFinishThroughEndOfInput()
 
-        return try await collected
+        return (try await collected, supportedLocale)
     }
 }

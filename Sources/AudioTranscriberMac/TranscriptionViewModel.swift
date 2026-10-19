@@ -13,6 +13,7 @@ final class TranscriptionViewModel {
     var transcript = ""
     var statusMessage = "Idle"
     var isTranscribing = false
+    var lastMetadata: TranscriptionMetadata?
 
     private var currentTask: Task<Void, Never>?
     private var qwen3Runtime: Qwen3ASRRuntime?
@@ -31,19 +32,30 @@ final class TranscriptionViewModel {
 
         isTranscribing = true
         transcript = ""
+        lastMetadata = nil
         statusMessage = "Starting..."
+
+        let startedAt = Date()
 
         currentTask = Task {
             do {
                 let text: String
+                var appleLocaleUsed: String?
+
                 switch backend {
                 case .qwen3ASR:
                     text = try await runQwen3(url: url)
                 case .appleNative:
-                    text = try await runAppleNative(url: url)
+                    let (resultText, resolvedLocale) = try await runAppleNative(url: url)
+                    text = resultText
+                    appleLocaleUsed = displayName(for: resolvedLocale)
                 }
+
                 transcript = text
                 statusMessage = "Done"
+                lastMetadata = buildMetadata(
+                    url: url, text: text, appleLocaleUsed: appleLocaleUsed, startedAt: startedAt
+                )
             } catch is CancellationError {
                 statusMessage = "Cancelled"
             } catch {
@@ -55,6 +67,32 @@ final class TranscriptionViewModel {
 
     func cancelTranscription() {
         currentTask?.cancel()
+    }
+
+    private func buildMetadata(
+        url: URL, text: String, appleLocaleUsed: String?, startedAt: Date
+    ) -> TranscriptionMetadata {
+        let fileInfo = try? AudioFileInspector.inspect(url: url)
+        let requestedLanguage: String =
+            switch backend {
+            case .qwen3ASR: qwen3Language ?? "Auto-detect"
+            case .appleNative: displayName(for: appleLocale)
+            }
+
+        return TranscriptionMetadata(
+            fileName: url.lastPathComponent,
+            fileDuration: fileInfo?.duration,
+            fileFormatDescription: fileInfo.map { "\(Int($0.sampleRate)) Hz, \($0.channelCount)ch" },
+            backend: backend,
+            requestedLanguage: requestedLanguage,
+            appleLocaleUsed: appleLocaleUsed,
+            processingTime: Date().timeIntervalSince(startedAt),
+            wordCount: text.split(whereSeparator: \.isWhitespace).count
+        )
+    }
+
+    private func displayName(for locale: Locale) -> String {
+        locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
     }
 
     private func runQwen3(url: URL) async throws -> String {
@@ -79,7 +117,7 @@ final class TranscriptionViewModel {
         return try await runtime.transcribe(audio: samples, sampleRate: 16000, language: qwen3Language)
     }
 
-    private func runAppleNative(url: URL) async throws -> String {
+    private func runAppleNative(url: URL) async throws -> (text: String, resolvedLocale: Locale) {
         statusMessage = "Transcribing (Apple native)..."
         return try await AppleNativeTranscriber.transcribe(fileURL: url, locale: appleLocale)
     }
