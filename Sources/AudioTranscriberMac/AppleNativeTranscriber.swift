@@ -33,7 +33,13 @@ enum AppleNativeTranscriber {
         Array(await SpeechTranscriber.supportedLocales)
     }
 
-    static func transcribe(fileURL: URL, locale: Locale) async throws -> (text: String, resolvedLocale: Locale) {
+    /// Ensures the given locale's on-device model asset is installed,
+    /// without transcribing anything. Shared by the proactive "prepare this
+    /// backend" UI path and transcribe()'s own safety-net check below --
+    /// the OS-level asset install is keyed by locale, not by any particular
+    /// SpeechTranscriber instance, so it's idempotent and cheap to call
+    /// again if already installed.
+    static func ensureModelInstalled(locale: Locale) async throws -> Locale {
         guard SpeechTranscriber.isAvailable else {
             throw AppleNativeTranscriberError.unavailable
         }
@@ -42,13 +48,17 @@ enum AppleNativeTranscriber {
         }
 
         let transcriber = SpeechTranscriber(locale: supportedLocale, preset: .transcription)
-
         if await AssetInventory.status(forModules: [transcriber]) != .installed {
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
                 try await request.downloadAndInstall()
             }
         }
+        return supportedLocale
+    }
 
+    static func transcribe(fileURL: URL, locale: Locale) async throws -> (text: String, resolvedLocale: Locale) {
+        let supportedLocale = try await ensureModelInstalled(locale: locale)
+        let transcriber = SpeechTranscriber(locale: supportedLocale, preset: .transcription)
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         let audioFile = try AVAudioFile(forReading: fileURL)
 
