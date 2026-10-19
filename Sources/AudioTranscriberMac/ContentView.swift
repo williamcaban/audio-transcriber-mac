@@ -227,7 +227,7 @@ struct ContentView: View {
             case .appleNative:
                 Picker("Language", selection: $viewModel.appleLocale) {
                     ForEach(viewModel.availableAppleLocales, id: \.identifier) { locale in
-                        Text(locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier)
+                        Text(locale.appDisplayName)
                             .tag(locale)
                     }
                 }

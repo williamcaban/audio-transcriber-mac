@@ -79,7 +79,7 @@ final class TranscriptionViewModel {
                 case .appleNative:
                     let (resultText, resolvedLocale) = try await runAppleNative(url: url)
                     text = resultText
-                    appleLocaleUsed = displayName(for: resolvedLocale)
+                    appleLocaleUsed = resolvedLocale.appDisplayName
                 }
 
                 transcript = text
@@ -159,7 +159,7 @@ final class TranscriptionViewModel {
         let requestedLanguage: String =
             switch backend {
             case .qwen3ASR: qwen3Language ?? "Auto-detect"
-            case .appleNative: displayName(for: appleLocale)
+            case .appleNative: appleLocale.appDisplayName
             }
 
         return TranscriptionMetadata(
@@ -172,10 +172,6 @@ final class TranscriptionViewModel {
             processingTime: Date().timeIntervalSince(startedAt),
             wordCount: text.split(whereSeparator: \.isWhitespace).count
         )
-    }
-
-    private func displayName(for locale: Locale) -> String {
-        locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
     }
 
     private func runQwen3(url: URL) async throws -> String {
