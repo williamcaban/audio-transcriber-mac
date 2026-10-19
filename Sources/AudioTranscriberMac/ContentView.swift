@@ -16,6 +16,7 @@ struct ContentView: View {
                 settingsSection
             }
             dropZone
+            languagePicker
             actionBar
             statusBar
             transcriptCard
@@ -50,7 +51,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Audio Transcriber")
                     .font(.title2.bold())
-                Text("On-device transcription with Qwen3-ASR or Apple's native speech engine")
+                Text("On-device AI-powered transcriptions")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -124,7 +125,6 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            languagePicker
         }
         .padding(16)
         .background(
@@ -215,23 +215,30 @@ struct ContentView: View {
     // rather than papering over the asymmetry.
     @ViewBuilder
     private var languagePicker: some View {
-        switch viewModel.backend {
-        case .qwen3ASR:
-            Picker("Language", selection: $viewModel.qwen3Language) {
-                Text("Auto-detect").tag(String?.none)
-                ForEach(Qwen3Languages.all, id: \.self) { language in
-                    Text(language).tag(String?.some(language))
+        Group {
+            switch viewModel.backend {
+            case .qwen3ASR:
+                Picker("Language", selection: $viewModel.qwen3Language) {
+                    Text("Auto-detect").tag(String?.none)
+                    ForEach(Qwen3Languages.all, id: \.self) { language in
+                        Text(language).tag(String?.some(language))
+                    }
                 }
-            }
-        case .appleNative:
-            Picker("Language", selection: $viewModel.appleLocale) {
-                ForEach(viewModel.availableAppleLocales, id: \.identifier) { locale in
-                    Text(locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier)
-                        .tag(locale)
+            case .appleNative:
+                Picker("Language", selection: $viewModel.appleLocale) {
+                    ForEach(viewModel.availableAppleLocales, id: \.identifier) { locale in
+                        Text(locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier)
+                            .tag(locale)
+                    }
                 }
+                .disabled(viewModel.availableAppleLocales.isEmpty)
             }
-            .disabled(viewModel.availableAppleLocales.isEmpty)
         }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
     }
 
     private var actionBar: some View {
@@ -288,14 +295,21 @@ struct ContentView: View {
     }
 
     private var statusBar: some View {
-        HStack(spacing: 8) {
-            if viewModel.isTranscribing {
-                ProgressView()
-                    .controlSize(.small)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                if viewModel.isTranscribing {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Text(viewModel.statusMessage)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
-            Text(viewModel.statusMessage)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            if viewModel.isTranscribing {
+                Text("Longer files can take several minutes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

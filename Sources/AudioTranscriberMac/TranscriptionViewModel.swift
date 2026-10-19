@@ -189,7 +189,28 @@ final class TranscriptionViewModel {
             prepareQwen3()
             throw TranscriptionViewModelError.backendNotReady
         }
-        return try await runtime.transcribe(audio: samples, sampleRate: 16000, language: qwen3Language)
+        // Qwen3-ASR's audio encoder has a fixed ~30s window -- sending a
+        // whole long file in one call silently produces no usable output
+        // past that window rather than erroring clearly, which is exactly
+        // the "transcription completes but nothing is displayed" bug this
+        // chunking fixes. Non-overlapping 30s chunks match the Python
+        // sibling project's identical, documented approach (including its
+        // known tradeoff: a word spanning a chunk boundary can come out
+        // slightly garbled).
+        let chunks = AudioLoader.chunk(samples, bySeconds: 30, sampleRate: 16000)
+        var combined = ""
+        for (index, chunk) in chunks.enumerated() {
+            try Task.checkCancellation()
+            if chunks.count > 1 {
+                statusMessage = "Transcribing part \(index + 1) of \(chunks.count)..."
+            }
+            let text = try await runtime.transcribe(audio: chunk, sampleRate: 16000, language: qwen3Language)
+            if !combined.isEmpty, !text.isEmpty {
+                combined += " "
+            }
+            combined += text
+        }
+        return combined
     }
 
     private func runAppleNative(url: URL) async throws -> (text: String, resolvedLocale: Locale) {
