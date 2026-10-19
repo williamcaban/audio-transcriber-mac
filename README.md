@@ -24,6 +24,23 @@ current progress.
 - macOS 26 (Tahoe) or later, Apple Silicon
 - Xcode (for the macOS 26 SDK)
 
+## Build and run
+
+```bash
+swift run
+```
+
+If that fails with something like
+`bad interpreter: /usr/local/opt/python@2/bin/python2.7: no such file or directory`,
+your machine has an unrelated tool also named `swift` (commonly OpenStack's
+`python-swiftclient`, installed via an old Homebrew Python 2) shadowing the
+real Xcode toolchain earlier in `PATH`. Bypass it without touching your
+`PATH`:
+
+```bash
+xcrun swift run
+```
+
 ## License
 
 [Apache License 2.0](LICENSE).
