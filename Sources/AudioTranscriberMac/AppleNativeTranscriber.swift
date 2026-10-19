@@ -7,16 +7,16 @@ enum AppleNativeTranscriberError: Error {
 }
 
 // Apple's SpeechAnalyzer/SpeechTranscriber (macOS 26+) has no public GitHub
-// source to read the way speech-swift does -- this is reconstructed from
-// Apple's WWDC25 session and third-party write-ups, not verified by
-// compiling it myself (no local Xcode/macOS access). CI only proves the
-// Qwen3-ASR path builds against a real dependency graph; this file's
-// correctness can only be confirmed by William building on his Mac. If
-// exact API names (e.g. AssetInventory's status enum cases) turn out
-// slightly different, that's expected and should be a quick fix once the
-// real compiler error is visible.
+// source to read the way speech-swift does -- this was reconstructed from
+// Apple's WWDC25 session and third-party write-ups, then corrected once
+// against a real compile error (SpeechTranscriber.Result's property is
+// `isFinal`, not the originally-guessed `isVolatile`; everything else --
+// AssetInventory's status cases, analyzeSequence/finalizeAndFinish
+// signatures, the Result type's other properties -- matched on the first
+// try). CI only proves it builds; actual behavior still needs William's
+// Mac.
 //
-// Also unconfirmed: whether this requires a speech-recognition usage
+// Still unconfirmed: whether this requires a speech-recognition usage
 // description/authorization prompt even for transcribing a local file
 // (rather than live mic capture). This bare SPM executable has no
 // Info.plist to add an NSSpeechRecognitionUsageDescription key to if one
@@ -58,7 +58,7 @@ enum AppleNativeTranscriber {
         // audio coming and exit, rather than hanging forever.
         async let collected: String = {
             var full = ""
-            for try await result in transcriber.results where !result.isVolatile {
+            for try await result in transcriber.results where result.isFinal {
                 full += String(result.text.characters)
             }
             return full
