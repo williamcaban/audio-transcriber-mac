@@ -7,12 +7,15 @@ struct ContentView: View {
     @State private var showExportError = false
     @State private var isDropTargeted = false
     @State private var showDetails = false
+    @State private var showSettings = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             header
+            if showSettings {
+                settingsSection
+            }
             dropZone
-            settingsCard
             actionBar
             statusBar
             transcriptCard
@@ -21,8 +24,19 @@ struct ContentView: View {
             }
         }
         .padding(24)
-        .frame(minWidth: 640, minHeight: 540)
-        .onAppear { viewModel.loadAvailableAppleLocales() }
+        .frame(minWidth: 680, minHeight: 580)
+        .onAppear {
+            viewModel.loadAvailableAppleLocales()
+            viewModel.prepareBackend(viewModel.backend)
+        }
+        .onChange(of: viewModel.backend) { _, newBackend in
+            viewModel.prepareBackend(newBackend)
+        }
+        .onChange(of: viewModel.appleLocale) {
+            if viewModel.backend == .appleNative {
+                viewModel.prepareBackend(.appleNative)
+            }
+        }
         .alert("Export failed", isPresented: $showExportError) {
             Button("OK", role: .cancel) {}
         }
@@ -40,6 +54,18 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Spacer()
+
+            Button {
+                showSettings.toggle()
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(showSettings ? Color.accentColor : .secondary)
+            .help("Settings")
         }
     }
 
@@ -90,15 +116,14 @@ struct ContentView: View {
         }
     }
 
-    private var settingsCard: some View {
+    private var settingsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("Backend", selection: $viewModel.backend) {
-                ForEach(TranscriptionBackend.allCases) { backend in
-                    Text(backend.rawValue).tag(backend)
-                }
+            backendRow
+            if let caption = backendLoadCaption {
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .pickerStyle(.segmented)
-
             languagePicker
         }
         .padding(16)
@@ -106,6 +131,81 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
+    }
+
+    // Each button both selects and (if needed) triggers download of its
+    // backend's model, with its own inline state -- not downloaded,
+    // downloading with progress, ready, or failed. This replaces a plain
+    // segmented picker specifically so both backends' download states are
+    // visible at once, at the row where the backend is chosen, rather than
+    // conflated into the single shared status line below (which is what
+    // caused a real, reported bug: a stale "Ready (100%)" download message
+    // sitting on screen while actual transcription was still in progress).
+    private var backendRow: some View {
+        HStack(spacing: 10) {
+            ForEach(TranscriptionBackend.allCases) { backend in
+                backendButton(backend)
+            }
+        }
+    }
+
+    private func backendButton(_ backend: TranscriptionBackend) -> some View {
+        let isSelected = viewModel.backend == backend
+        return Button {
+            viewModel.backend = backend
+            viewModel.prepareBackend(backend)
+        } label: {
+            HStack(spacing: 8) {
+                Text(backend.rawValue)
+                    .font(.body.weight(.medium))
+                stateIndicator(viewModel.loadState(for: backend))
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(isSelected ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 1.5)
+        )
+    }
+
+    @ViewBuilder
+    private func stateIndicator(_ state: BackendLoadState) -> some View {
+        switch state {
+        case .notLoaded:
+            Image(systemName: "icloud.and.arrow.down")
+                .foregroundStyle(.secondary)
+        case .loading(let progress, _):
+            if progress > 0 {
+                ProgressView(value: progress)
+                    .frame(width: 36)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        case .ready:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+        }
+    }
+
+    private var backendLoadCaption: String? {
+        switch viewModel.loadState(for: viewModel.backend) {
+        case .notLoaded, .ready:
+            nil
+        case .loading(let progress, let message):
+            progress > 0 ? "\(message) (\(Int(progress * 100))%)" : message
+        case .failed(let reason):
+            "Failed to load: \(reason)"
+        }
     }
 
     // Each backend's real language capability is different -- Qwen3-ASR can
@@ -135,13 +235,15 @@ struct ContentView: View {
     }
 
     private var actionBar: some View {
-        HStack {
+        HStack(spacing: 12) {
             Button {
                 viewModel.startTranscription()
             } label: {
                 Label(viewModel.isTranscribing ? "Transcribing..." : "Transcribe", systemImage: "play.fill")
+                    .frame(minWidth: 120)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .disabled(!viewModel.canTranscribe)
 
             if viewModel.isTranscribing {
@@ -150,6 +252,7 @@ struct ContentView: View {
                 } label: {
                     Label("Cancel", systemImage: "xmark")
                 }
+                .controlSize(.large)
             }
 
             Spacer()
@@ -159,6 +262,7 @@ struct ContentView: View {
             } label: {
                 Label("Details", systemImage: "info.circle")
             }
+            .controlSize(.large)
             .disabled(viewModel.lastMetadata == nil)
 
             Button {
@@ -166,13 +270,19 @@ struct ContentView: View {
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
             }
+            .controlSize(.large)
             .disabled(viewModel.transcript.isEmpty)
 
-            Button {
-                exportMarkdown()
+            Menu {
+                ForEach(ExportFormat.allCases) { format in
+                    Button("\(format.rawValue) (.\(format.fileExtension))") {
+                        exportTranscript(as: format)
+                    }
+                }
             } label: {
-                Label("Export...", systemImage: "square.and.arrow.down")
+                Label("Export", systemImage: "square.and.arrow.down")
             }
+            .controlSize(.large)
             .disabled(viewModel.transcript.isEmpty)
         }
     }
@@ -285,15 +395,22 @@ struct ContentView: View {
         pasteboard.setString(viewModel.transcript, forType: .string)
     }
 
-    private func exportMarkdown() {
+    // .docx already opens natively in Pages -- no separate Pages-specific
+    // export format needed to cover that case.
+    private func exportTranscript(as format: ExportFormat) {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.allowedContentTypes = [format.contentType]
         let baseName = viewModel.selectedFileURL?.deletingPathExtension().lastPathComponent ?? "transcript"
-        panel.nameFieldStringValue = "\(baseName).md"
+        panel.nameFieldStringValue = "\(baseName).\(format.fileExtension)"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try viewModel.transcript.write(to: url, atomically: true, encoding: .utf8)
+            switch format {
+            case .text, .markdown:
+                try viewModel.transcript.write(to: url, atomically: true, encoding: .utf8)
+            case .docx:
+                try DocxExporter.export(text: viewModel.transcript, to: url)
+            }
         } catch {
             showExportError = true
         }

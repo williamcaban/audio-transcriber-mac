@@ -2,6 +2,10 @@ import Foundation
 import Observation
 import Qwen3ASRRuntime
 
+enum TranscriptionViewModelError: Error {
+    case backendNotReady
+}
+
 @MainActor
 @Observable
 final class TranscriptionViewModel {
@@ -15,8 +19,18 @@ final class TranscriptionViewModel {
     var isTranscribing = false
     var lastMetadata: TranscriptionMetadata?
 
+    var qwen3LoadState: BackendLoadState = .notLoaded
+    var appleLoadState: BackendLoadState = .notLoaded
+
     private var currentTask: Task<Void, Never>?
     private var qwen3Runtime: Qwen3ASRRuntime?
+
+    func loadState(for backend: TranscriptionBackend) -> BackendLoadState {
+        switch backend {
+        case .qwen3ASR: qwen3LoadState
+        case .appleNative: appleLoadState
+        }
+    }
 
     func loadAvailableAppleLocales() {
         Task {
@@ -25,15 +39,32 @@ final class TranscriptionViewModel {
         }
     }
 
-    var canTranscribe: Bool { selectedFileURL != nil && !isTranscribing }
+    /// Eagerly downloads/loads the given backend's model, rather than
+    /// letting it happen lazily inside startTranscription() -- that lazy
+    /// path caused a real, reported bug: the download-progress callback
+    /// kept firing into the shared status line well after transcription had
+    /// visibly "started", so the UI got stuck showing a stale "Ready (100%)"
+    /// download message while real transcription work was still underway.
+    /// Call this on backend selection (and on the initial default backend),
+    /// not on every transcribe -- it's a no-op once already ready.
+    func prepareBackend(_ backend: TranscriptionBackend) {
+        switch backend {
+        case .qwen3ASR: prepareQwen3()
+        case .appleNative: prepareAppleNative()
+        }
+    }
+
+    var canTranscribe: Bool {
+        selectedFileURL != nil && !isTranscribing && loadState(for: backend) == .ready
+    }
 
     func startTranscription() {
-        guard let url = selectedFileURL, !isTranscribing else { return }
+        guard let url = selectedFileURL, !isTranscribing, loadState(for: backend) == .ready else { return }
 
         isTranscribing = true
         transcript = ""
         lastMetadata = nil
-        statusMessage = "Starting..."
+        statusMessage = "Transcribing..."
 
         let startedAt = Date()
 
@@ -69,6 +100,58 @@ final class TranscriptionViewModel {
         currentTask?.cancel()
     }
 
+    private func prepareQwen3() {
+        if qwen3Runtime != nil {
+            qwen3LoadState = .ready
+            return
+        }
+        if case .loading = qwen3LoadState { return }
+
+        qwen3LoadState = .loading(progress: 0, message: "Starting...")
+        let runtime = Qwen3ASRRuntime(descriptor: Qwen3ASRDescriptors.large) { [weak self] progress, message in
+            Task { @MainActor in
+                self?.qwen3LoadState = .loading(progress: progress, message: message)
+            }
+        }
+
+        Task {
+            do {
+                try await runtime.prepare()
+                qwen3Runtime = runtime
+                qwen3LoadState = .ready
+            } catch {
+                qwen3LoadState = .failed("\(error)")
+            }
+        }
+    }
+
+    private func prepareAppleNative() {
+        if case .loading = appleLoadState { return }
+
+        appleLoadState = .loading(progress: 0, message: "Checking language model...")
+        let locale = appleLocale
+
+        Task {
+            do {
+                // AssetInstallationRequest exposes a KVO Progress object,
+                // not an async progress callback like Qwen3ASRRuntime --
+                // not wired up here, so this shows as indeterminate rather
+                // than a real percentage. Apple's locale assets are
+                // typically much smaller than Qwen3-ASR's MLX checkpoint
+                // and may already be cached from Dictation/Siri use, so
+                // this is usually fast regardless.
+                _ = try await AppleNativeTranscriber.ensureModelInstalled(locale: locale)
+                if locale == appleLocale {
+                    appleLoadState = .ready
+                }
+            } catch {
+                if locale == appleLocale {
+                    appleLoadState = .failed("\(error)")
+                }
+            }
+        }
+    }
+
     private func buildMetadata(
         url: URL, text: String, appleLocaleUsed: String?, startedAt: Date
     ) -> TranscriptionMetadata {
@@ -98,27 +181,18 @@ final class TranscriptionViewModel {
     private func runQwen3(url: URL) async throws -> String {
         let samples = try AudioLoader.loadMonoFloatSamples(url: url)
         try Task.checkCancellation()
-
-        let runtime: Qwen3ASRRuntime
-        if let existing = qwen3Runtime {
-            runtime = existing
-        } else {
-            statusMessage = "Loading model (first run downloads it)..."
-            runtime = Qwen3ASRRuntime(descriptor: Qwen3ASRDescriptors.large) { [weak self] progress, message in
-                Task { @MainActor in
-                    self?.statusMessage = "\(message) (\(Int(progress * 100))%)"
-                }
-            }
-            qwen3Runtime = runtime
+        guard let runtime = qwen3Runtime else {
+            // Shouldn't happen: canTranscribe/startTranscription both gate
+            // on loadState == .ready, which is only set once qwen3Runtime
+            // is non-nil. Fall back to on-the-spot loading rather than
+            // crashing if this invariant is ever violated.
+            prepareQwen3()
+            throw TranscriptionViewModelError.backendNotReady
         }
-
-        try Task.checkCancellation()
-        statusMessage = "Transcribing..."
         return try await runtime.transcribe(audio: samples, sampleRate: 16000, language: qwen3Language)
     }
 
     private func runAppleNative(url: URL) async throws -> (text: String, resolvedLocale: Locale) {
-        statusMessage = "Transcribing (Apple native)..."
-        return try await AppleNativeTranscriber.transcribe(fileURL: url, locale: appleLocale)
+        try await AppleNativeTranscriber.transcribe(fileURL: url, locale: appleLocale)
     }
 }
