@@ -64,4 +64,24 @@ enum AudioLoader {
 
         return Array(UnsafeBufferPointer(start: channelData[0], count: Int(targetBuffer.frameLength)))
     }
+
+    /// Splits mono samples into fixed-size, non-overlapping chunks. Needed
+    /// for Qwen3-ASR specifically: its audio encoder has a fixed ~30s
+    /// window (same constraint documented in the Python sibling project,
+    /// which is why it also chunks at 30s) -- feeding it a whole long file
+    /// in one call silently produces no usable output once past that
+    /// window, rather than erroring clearly. Apple's SpeechAnalyzer has no
+    /// such limit (it's designed for arbitrary-length streaming input), so
+    /// this is only used on the Qwen3-ASR path.
+    ///
+    /// Non-overlapping chunk boundaries mean a word spanning a boundary can
+    /// come out slightly garbled -- same known, documented tradeoff as the
+    /// Python app's identical chunking approach.
+    static func chunk(_ samples: [Float], bySeconds seconds: Double, sampleRate: Double) -> [[Float]] {
+        let chunkSize = Int(seconds * sampleRate)
+        guard chunkSize > 0, samples.count > chunkSize else { return [samples] }
+        return stride(from: 0, to: samples.count, by: chunkSize).map {
+            Array(samples[$0..<Swift.min($0 + chunkSize, samples.count)])
+        }
+    }
 }
