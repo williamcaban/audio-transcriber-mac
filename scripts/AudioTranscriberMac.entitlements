@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hardened Runtime (required for notarization) rejects loading any
+         dynamically-linked binary not signed by the same team identity as
+         the main executable. speech-swift's dependency graph (MLX, etc.)
+         produces its own binaries during a plain "swift build", signed
+         ad-hoc by default rather than with our Developer ID, so without
+         this Hardened Runtime would very likely block those at launch.
+         Same class of problem the Python sibling project's py2app build
+         also needed to work around, just via a different mechanism there. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

@@ -17,3 +17,11 @@ jobs:
           xcodebuild -version
       - name: Build
         run: swift build -v
+      - name: Build .app bundle
+        run: ./scripts/bundle-app.sh
+      - name: Verify .app bundle structure
+        run: |
+          APP="dist/Audio Transcriber.app"
+          test -f "$APP/Contents/MacOS/AudioTranscriberMac"
+          test -f "$APP/Contents/Info.plist"
+          plutil -lint "$APP/Contents/Info.plist"
