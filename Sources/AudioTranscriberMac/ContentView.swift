@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var isDropTargeted = false
     @State private var showDetails = false
     @State private var showSettings = false
+    @State private var isSpellCheckingEnabled = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -49,8 +50,13 @@ struct ContentView: View {
                 .font(.largeTitle)
                 .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Audio Transcriber")
-                    .font(.title2.bold())
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("Audio Transcriber")
+                        .font(.title2.bold())
+                    Text(AppVersion.displayString)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Text("On-device AI-powered transcriptions")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -272,6 +278,12 @@ struct ContentView: View {
             .controlSize(.large)
             .disabled(viewModel.lastMetadata == nil)
 
+            Toggle(isOn: $isSpellCheckingEnabled) {
+                Label("Spell Check", systemImage: "checkmark.bubble")
+            }
+            .toggleStyle(.button)
+            .controlSize(.large)
+
             Button {
                 copyTranscript()
             } label: {
@@ -314,16 +326,28 @@ struct ContentView: View {
     }
 
     private var transcriptCard: some View {
-        SelectableTextView(text: viewModel.transcript, placeholder: "Transcript will appear here.")
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(nsColor: .textBackgroundColor))
+        ZStack(alignment: .topLeading) {
+            WordProcessorTextView(
+                text: $viewModel.transcript,
+                isSpellCheckingEnabled: isSpellCheckingEnabled,
+                spellCheckLanguageCode: viewModel.spellCheckLanguageCode
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.secondary.opacity(0.2))
-            )
-            .frame(maxHeight: .infinity)
+            if viewModel.transcript.isEmpty {
+                Text("Transcript will appear here. You can edit it directly, including fixing any mistakes.")
+                    .foregroundStyle(.secondary)
+                    .padding(20)
+                    .allowsHitTesting(false)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.2))
+        )
+        .frame(maxHeight: .infinity)
     }
 
     private func detailsCard(_ metadata: TranscriptionMetadata) -> some View {

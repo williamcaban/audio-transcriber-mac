@@ -18,4 +18,20 @@ enum Qwen3Languages {
         "Persian", "Polish", "Portuguese", "Romanian", "Russian", "Spanish",
         "Swedish", "Thai", "Turkish", "Vietnamese",
     ]
+
+    /// BCP-47 codes for NSSpellChecker, keyed by the display names above.
+    /// Best-effort: NSSpellChecker only underlines words for languages that
+    /// actually have a dictionary installed, so an unsupported code here
+    /// just means spell-check silently has no effect for that language,
+    /// never a crash or a wrong result.
+    static let spellCheckCodes: [String: String] = [
+        "Arabic": "ar", "Cantonese": "yue", "Chinese": "zh-Hans", "Czech": "cs",
+        "Danish": "da", "Dutch": "nl", "English": "en", "Filipino": "fil",
+        "Finnish": "fi", "French": "fr", "German": "de", "Greek": "el",
+        "Hindi": "hi", "Hungarian": "hu", "Indonesian": "id", "Italian": "it",
+        "Japanese": "ja", "Korean": "ko", "Macedonian": "mk", "Malay": "ms",
+        "Persian": "fa", "Polish": "pl", "Portuguese": "pt", "Romanian": "ro",
+        "Russian": "ru", "Spanish": "es", "Swedish": "sv", "Thai": "th",
+        "Turkish": "tr", "Vietnamese": "vi",
+    ]
 }
