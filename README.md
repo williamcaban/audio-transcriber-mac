@@ -1,22 +1,36 @@
 # Audio Transcriber (native macOS)
 
-A native SwiftUI macOS app that transcribes audio/video files to Markdown
-(and, later, Word), using two on-device backends:
+A native SwiftUI macOS app for transcribing audio/video files, entirely
+on-device — no cloud calls, no accounts, no uploading your recordings
+anywhere.
 
-- **[Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf)**, via
-  [soniqo/speech-swift](https://github.com/soniqo/speech-swift) (MLX):
-  forced or auto-detected language, broad language coverage.
-- **Apple native** ([`SpeechAnalyzer`/`SpeechTranscriber`](https://developer.apple.com/videos/play/wwdc2025/277/)):
-  on-device, system-managed model, no bundling required.
+## Features
 
-This is a ground-up native rewrite, not a wrapper around a server. See
-[williamcaban/audio-transcriber](https://github.com/williamcaban/audio-transcriber)
-for the cross-platform FastAPI version (Linux/container/Parakeet TDT), which
-this project does not replace.
+- **Transcription** from any audio or video file (drag-drop or file picker),
+  via one of two on-device backends:
+  - **[Qwen3-ASR](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf)**, via
+    [soniqo/speech-swift](https://github.com/soniqo/speech-swift) (MLX):
+    forced or auto-detected language, broad language coverage.
+  - **Apple native** ([`SpeechAnalyzer`/`SpeechTranscriber`](https://developer.apple.com/videos/play/wwdc2025/277/)):
+    on-device, system-managed model, no bundling required.
+- **Editable, word-processor-style text** for the transcript, report, and
+  translation — fix mistakes directly, the same way you would in Pages or
+  Word.
+- **AI Cleanup**: an on-device local LLM pass that corrects spelling/grammar
+  and strips stray foreign-script leakage, without summarizing or
+  rephrasing.
+- **Report & Summary**: an AI-generated two-part summary and prose report
+  from the transcript, in a language you choose independently of the
+  transcript's own language.
+- **Translation**: translate the report to another language, also via the
+  local LLM.
+- **Export** any tab's text as plain text, Markdown, or Word — Word export
+  preserves real formatting (headings, bold, lists) rather than raw
+  Markdown syntax.
 
 ## Status
 
-Early scaffold — no working build yet. See open issues/milestones for
+Working app under active development. See open issues/milestones for
 current progress.
 
 ## Requirements
@@ -26,19 +40,24 @@ current progress.
 
 ## Build and run
 
+Clone the repo:
+
+```bash
+git clone https://github.com/williamcaban/audio-transcriber-mac.git
+cd audio-transcriber-mac
+```
+
+To run the app for development (builds and launches it directly):
+
 ```bash
 swift run
 ```
 
-If that fails with something like
-`bad interpreter: /usr/local/opt/python@2/bin/python2.7: no such file or directory`,
-your machine has an unrelated tool also named `swift` (commonly OpenStack's
-`python-swiftclient`, installed via an old Homebrew Python 2) shadowing the
-real Xcode toolchain earlier in `PATH`. Bypass it without touching your
-`PATH`:
+To build a standalone `.app` bundle instead:
 
 ```bash
-xcrun swift run
+./scripts/bundle-app.sh
+open "dist/Audio Transcriber.app"
 ```
 
 ## License
