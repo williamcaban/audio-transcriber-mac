@@ -395,6 +395,11 @@ struct ContentView: View {
                 Spacer()
                 copyExportControls(text: viewModel.reportText, exportSuffix: "-report")
             }
+            if viewModel.isGeneratingReport, let status = viewModel.reportStatusMessage {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if let message = viewModel.reportErrorMessage {
                 Text(message)
                     .font(.callout)

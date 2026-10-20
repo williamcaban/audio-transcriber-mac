@@ -22,6 +22,7 @@ final class TranscriptionViewModel {
     var reportText = ""
     var isGeneratingReport = false
     var reportErrorMessage: String?
+    var reportStatusMessage: String?
 
     var qwen3LoadState: BackendLoadState = .notLoaded
     var appleLoadState: BackendLoadState = .notLoaded
@@ -130,19 +131,27 @@ final class TranscriptionViewModel {
         guard canGenerateReport else { return }
         isGeneratingReport = true
         reportErrorMessage = nil
+        reportStatusMessage = "Starting..."
         let transcriptSnapshot = transcript
 
         Task {
             do {
-                reportText = try await ReportGenerator.generateReport(from: transcriptSnapshot)
+                reportText = try await ReportGenerator.generateReport(from: transcriptSnapshot) { [weak self] message in
+                    Task { @MainActor in
+                        self?.reportStatusMessage = message
+                    }
+                }
             } catch ReportGeneratorError.unavailable(let message) {
                 reportErrorMessage = message
             } catch ReportGeneratorError.guardrailFlagged {
                 reportErrorMessage = "Apple's on-device safety filter flagged this transcript and couldn't generate a summary. This can happen even with ordinary content -- you can write the summary manually in this tab, or try again."
+            } catch ReportGeneratorError.contentTooLong {
+                reportErrorMessage = "This transcript is too long to summarize, even in parts. Try a shorter recording."
             } catch {
                 reportErrorMessage = "Error: \(error)"
             }
             isGeneratingReport = false
+            reportStatusMessage = nil
         }
     }
 
