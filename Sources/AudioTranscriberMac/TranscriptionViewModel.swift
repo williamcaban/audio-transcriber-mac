@@ -21,6 +21,7 @@ final class TranscriptionViewModel {
     var lastMetadata: TranscriptionMetadata?
 
     var reportText = ""
+    var reportLanguage: String?  // nil = same as transcript
     var isGeneratingReport = false
     var reportErrorMessage: String?
     var reportStatusMessage: String?
@@ -129,10 +130,13 @@ final class TranscriptionViewModel {
         reportErrorMessage = nil
         reportStatusMessage = "Starting..."
         let transcriptSnapshot = transcript
+        let languageSnapshot = reportLanguage
 
         Task {
             do {
-                reportText = try await ReportGenerator.generateReport(from: transcriptSnapshot) { [weak self] message in
+                reportText = try await ReportGenerator.generateReport(
+                    from: transcriptSnapshot, language: languageSnapshot
+                ) { [weak self] message in
                     Task { @MainActor in
                         self?.reportStatusMessage = message
                     }

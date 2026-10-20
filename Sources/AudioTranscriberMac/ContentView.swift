@@ -370,6 +370,14 @@ struct ContentView: View {
     private var reportTab: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
+                Picker("Language", selection: $viewModel.reportLanguage) {
+                    Text("Same as transcript").tag(String?.none)
+                    ForEach(Qwen3Languages.all, id: \.self) { language in
+                        Text(language).tag(String?.some(language))
+                    }
+                }
+                .frame(maxWidth: 220)
+
                 Button {
                     viewModel.generateReport()
                 } label: {
