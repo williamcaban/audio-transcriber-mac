@@ -14,9 +14,16 @@ let package = Package(
         // replacing Apple's Foundation Models framework (which had a
         // mandatory, non-configurable content-safety guardrail that
         // flagged ordinary transcripts, and a hard 4096-token context
-        // window that failed on normal-length recordings). Pinned per
-        // mlx-swift-lm's own README-recommended versioning.
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMinor(from: "3.32.3")),
+        // window that failed on normal-length recordings).
+        //
+        // speech-swift (tracked at `main`, above) pins this exact
+        // dependency itself -- currently `.exact("3.31.4")` -- so this
+        // uses a broad `from:` range (upToNextMajor) rather than
+        // mlx-swift-lm's own README-recommended `.upToNextMinor(from:
+        // "3.32.3")`, specifically so a future speech-swift update that
+        // bumps its own pin doesn't reintroduce an unresolvable version
+        // conflict between the two.
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "3.31.4"),
         .package(url: "https://github.com/huggingface/swift-huggingface", from: "0.9.0"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
     ],
