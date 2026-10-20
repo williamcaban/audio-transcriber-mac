@@ -1,7 +1,6 @@
 import Foundation
 import Observation
 import Qwen3ASRRuntime
-import Translation
 
 enum TranscriptionViewModelError: Error {
     case backendNotReady
@@ -27,9 +26,7 @@ final class TranscriptionViewModel {
     var reportStatusMessage: String?
 
     var translatedText = ""
-    var targetLanguage = Locale.Language(identifier: Locale.current.language.languageCode?.identifier ?? "en")
-    var availableTranslationLanguages: [Locale.Language] = []
-    var translationConfiguration: TranslationSession.Configuration?
+    var targetLanguage: String?  // nil = none picked yet
     var isTranslating = false
     var translationErrorMessage: String?
     var translationStatusMessage: String?
@@ -124,13 +121,30 @@ final class TranscriptionViewModel {
         !transcript.isEmpty && !isGeneratingReport
     }
 
+    /// The transcript's language, when it's actually known (an explicit
+    /// Qwen3-ASR language, or Apple Native's resolved locale) rather than
+    /// left for the report LLM to guess from the content alone. Guessing
+    /// was the real bug behind "Same as transcript" reliably coming back in
+    /// English regardless of the transcript's real language: a small
+    /// instruct model asked only to "match the source language," with
+    /// nothing telling it what that is, has an observed English bias.
+    /// Qwen3-ASR auto-detect (qwen3Language == nil) has no real answer
+    /// here either -- the API never reports a detected language -- so that
+    /// case still falls back to the same guessing behavior as before.
+    var knownTranscriptLanguage: String? {
+        switch backend {
+        case .qwen3ASR: qwen3Language
+        case .appleNative: appleLocale.appDisplayName
+        }
+    }
+
     func generateReport() {
         guard canGenerateReport else { return }
         isGeneratingReport = true
         reportErrorMessage = nil
         reportStatusMessage = "Starting..."
         let transcriptSnapshot = transcript
-        let languageSnapshot = reportLanguage
+        let languageSnapshot = reportLanguage ?? knownTranscriptLanguage
 
         Task {
             do {
@@ -153,88 +167,34 @@ final class TranscriptionViewModel {
         }
     }
 
-    func loadAvailableTranslationLanguages() {
-        Task {
-            let languages = await Self.fetchSupportedLanguages()
-            availableTranslationLanguages = languages.sorted {
-                displayName(for: $0) < displayName(for: $1)
-            }
-        }
-    }
-
-    // `LanguageAvailability` isn't Sendable, so it must be created and used
-    // entirely within a single nonisolated async context rather than
-    // instantiated on the (MainActor-isolated) view model and awaited from
-    // there -- confirmed via a real compile error, not guessed.
-    nonisolated private static func fetchSupportedLanguages() async -> [Locale.Language] {
-        await LanguageAvailability().supportedLanguages
-    }
-
-    func displayName(for language: Locale.Language) -> String {
-        guard let code = language.languageCode?.identifier else {
-            return language.maximalIdentifier
-        }
-        return Locale.current.localizedString(forLanguageCode: code) ?? code
-    }
-
     var canTranslate: Bool {
-        !reportText.isEmpty && !isTranslating
+        !reportText.isEmpty && !isTranslating && targetLanguage != nil
     }
 
-    /// Translates the Report tab's text to `targetLanguage`. This only sets
-    /// up (or re-triggers) the session configuration -- the actual
-    /// translation work happens in `runTranslation(session:)`, called by
-    /// the `.translationTask` view modifier once it hands us a session,
-    /// since a `TranslationSession` can only be obtained that way.
+    /// Translates the Report tab's text to `targetLanguage` using the
+    /// shared local LLM -- see TranslationService.swift for why that's used
+    /// instead of Apple's Translation framework.
     func startTranslation() {
-        guard canTranslate else { return }
+        guard canTranslate, let language = targetLanguage else { return }
+        isTranslating = true
         translationErrorMessage = nil
-        if translationConfiguration?.target == targetLanguage {
-            // Same language as last time: a value-equal Configuration
-            // wouldn't retrigger translationTask on its own, so force it.
-            translationConfiguration?.invalidate()
-        } else {
-            translationConfiguration = TranslationSession.Configuration(target: targetLanguage)
-        }
-    }
+        translationStatusMessage = "Starting..."
+        let textSnapshot = reportText
 
-    // `TranslationSession`'s `translate` runs on a concurrent executor, not
-    // the main actor -- holding `session` inside a main-actor-isolated
-    // method (the default for everything else in this class) made the
-    // compiler flag every use of it as an actual data-race risk, not just a
-    // style nit (confirmed via real compile errors, not guessed). Staying
-    // `nonisolated` here, delegating the actual translate calls to the
-    // plain (non-actor) TranslationRunner, and hopping to the main actor
-    // only for the view-model property reads/writes is the fix.
-    nonisolated func runTranslation(session: TranslationSession) async {
-        let text = await reportText
-        guard !text.isEmpty else { return }
-
-        await MainActor.run {
-            isTranslating = true
-            translationErrorMessage = nil
-            translationStatusMessage = "Starting..."
-        }
-
-        do {
-            let result = try await TranslationRunner.translate(text, session: session) { [weak self] message in
-                Task { @MainActor in self?.translationStatusMessage = message }
-            }
-            await MainActor.run { translatedText = result }
-        } catch TranslationRunnerError.translationFailed(let message) {
-            await MainActor.run {
+        Task {
+            do {
+                translatedText = try await TranslationService.translate(textSnapshot, to: language) { [weak self] message in
+                    Task { @MainActor in
+                        self?.translationStatusMessage = message
+                    }
+                }
+            } catch TranslationServiceError.translationFailed(let message) {
                 translationErrorMessage = "Couldn't translate: \(message)"
+            } catch is CancellationError {
+                translationErrorMessage = nil
+            } catch {
+                translationErrorMessage = "Error: \(error)"
             }
-        } catch is CancellationError {
-            // User navigated away or started a new translation; leave
-            // whatever text was already there alone, no error to show.
-        } catch {
-            await MainActor.run {
-                translationErrorMessage = "Couldn't translate: \(error.localizedDescription)"
-            }
-        }
-
-        await MainActor.run {
             isTranslating = false
             translationStatusMessage = nil
         }
