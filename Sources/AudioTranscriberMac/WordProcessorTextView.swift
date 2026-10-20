@@ -50,18 +50,32 @@ struct WordProcessorTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? NSTextView else { return }
-        if textView.string != text {
+        let textChanged = textView.string != text
+        if textChanged {
             textView.string = text
         }
+
+        let spellCheckingJustEnabled = isSpellCheckingEnabled && !context.coordinator.wasSpellCheckingEnabled
         textView.isContinuousSpellCheckingEnabled = isSpellCheckingEnabled
         textView.isGrammarCheckingEnabled = isSpellCheckingEnabled
         if isSpellCheckingEnabled, let code = spellCheckLanguageCode {
             NSSpellChecker.shared.setLanguage(code)
         }
+        // Continuous spell checking only checks text as it's typed going
+        // forward -- it does NOT retroactively scan text that's already
+        // there (e.g. a freshly generated transcript), so toggling it on
+        // would otherwise show no visible effect at all. Force an explicit
+        // full-document check whenever checking just turned on, or whenever
+        // new text arrives while it's already on.
+        if isSpellCheckingEnabled, spellCheckingJustEnabled || textChanged {
+            textView.checkTextInDocument(nil)
+        }
+        context.coordinator.wasSpellCheckingEnabled = isSpellCheckingEnabled
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         private let text: Binding<String>
+        var wasSpellCheckingEnabled = false
 
         init(text: Binding<String>) {
             self.text = text
