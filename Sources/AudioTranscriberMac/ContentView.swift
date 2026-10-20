@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Translation
 import UniformTypeIdentifiers
 
 struct ContentView: View {
@@ -34,6 +35,7 @@ struct ContentView: View {
                 switch selectedTab {
                 case .transcript: transcriptTab
                 case .report: reportTab
+                case .translation: translationTab
                 }
             }
         }
@@ -42,6 +44,20 @@ struct ContentView: View {
         .onAppear {
             viewModel.loadAvailableAppleLocales()
             viewModel.prepareBackend(viewModel.backend)
+            viewModel.loadAvailableTranslationLanguages()
+        }
+        // Attached at the top level (not inside translationTab) since a
+        // TranslationSession can only be obtained via this modifier, and
+        // it's driven by the view model's configuration regardless of
+        // which tab happens to be visible when it fires. Marked @Sendable
+        // so the closure doesn't inherit this MainActor-isolated View's
+        // isolation (SE-0420) -- without that, `session` is treated as
+        // main-actor-isolated and handing it to `runTranslation` (which
+        // must call TranslationSession's concurrent-executor `translate`)
+        // is flagged as an actual data-race risk, confirmed via a real
+        // compile error, not a style nit.
+        .translationTask(viewModel.translationConfiguration) { @Sendable session in
+            await viewModel.runTranslation(session: session)
         }
         .onChange(of: viewModel.backend) { _, newBackend in
             viewModel.prepareBackend(newBackend)
@@ -404,6 +420,81 @@ struct ContentView: View {
             )
             if viewModel.reportText.isEmpty {
                 Text("Click Generate Summary to see a summary and prose report of the transcript here. You can edit it directly.")
+                    .foregroundStyle(.secondary)
+                    .padding(20)
+                    .allowsHitTesting(false)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.2))
+        )
+        .frame(maxHeight: .infinity)
+    }
+
+    // Operates on the Report tab's text, not the raw transcript -- the
+    // summary/report is the more natural thing to hand someone in another
+    // language, and keeping this a one-shot action (like Generate Summary)
+    // rather than automatic matches the same reasoning: real, non-instant
+    // on-device work shouldn't fire implicitly on every text change.
+    private var translationTab: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Picker("Translate to", selection: $viewModel.targetLanguage) {
+                    ForEach(viewModel.availableTranslationLanguages, id: \.self) { language in
+                        Text(viewModel.displayName(for: language)).tag(language)
+                    }
+                }
+                .frame(maxWidth: 220)
+                .disabled(viewModel.availableTranslationLanguages.isEmpty)
+
+                Button {
+                    viewModel.startTranslation()
+                } label: {
+                    Label(viewModel.isTranslating ? "Translating..." : "Translate", systemImage: "globe")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!viewModel.canTranslate)
+
+                if viewModel.isTranslating {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                tabToolbar(text: viewModel.translatedText, exportSuffix: "-translated")
+            }
+            if viewModel.isTranslating, let status = viewModel.translationStatusMessage {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let message = viewModel.translationErrorMessage {
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
+            translationCard
+            if showDetails, let metadata = viewModel.lastMetadata {
+                detailsCard(metadata)
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    private var translationCard: some View {
+        ZStack(alignment: .topLeading) {
+            WordProcessorTextView(
+                text: $viewModel.translatedText,
+                isSpellCheckingEnabled: isSpellCheckingEnabled,
+                spellCheckLanguageCode: viewModel.spellCheckLanguageCode
+            )
+            if viewModel.translatedText.isEmpty {
+                Text("Pick a language and click Translate to translate the Report & Summary text here. You can edit it directly.")
                     .foregroundStyle(.secondary)
                     .padding(20)
                     .allowsHitTesting(false)
