@@ -406,7 +406,7 @@ struct ContentView: View {
 
     private var reportCard: some View {
         ZStack(alignment: .topLeading) {
-            WordProcessorTextView(text: $viewModel.reportText)
+            WordProcessorTextView(text: $viewModel.reportText, isMarkdown: true)
             if viewModel.reportText.isEmpty {
                 Text("Click Generate Summary to see a summary and prose report of the transcript here. You can edit it directly.")
                     .foregroundStyle(.secondary)
@@ -478,7 +478,7 @@ struct ContentView: View {
 
     private var translationCard: some View {
         ZStack(alignment: .topLeading) {
-            WordProcessorTextView(text: $viewModel.translatedText)
+            WordProcessorTextView(text: $viewModel.translatedText, isMarkdown: true)
             if viewModel.translatedText.isEmpty {
                 Text("Pick a language and click Translate to translate the Report & Summary text here. You can edit it directly.")
                     .foregroundStyle(.secondary)
@@ -542,7 +542,7 @@ struct ContentView: View {
         Menu {
             ForEach(ExportFormat.allCases) { format in
                 Button("\(format.rawValue) (.\(format.fileExtension))") {
-                    exportText(text.wrappedValue, as: format, suffix: exportSuffix)
+                    exportText(text.wrappedValue, as: format, suffix: exportSuffix, isMarkdown: tab != .transcript)
                 }
             }
         } label: {
@@ -644,8 +644,11 @@ struct ContentView: View {
     }
 
     // .docx already opens natively in Pages -- no separate Pages-specific
-    // export format needed to cover that case.
-    private func exportText(_ text: String, as format: ExportFormat, suffix: String) {
+    // export format needed to cover that case. `isMarkdown` (true for the
+    // Report & Translation tabs) renders Markdown into real Word formatting
+    // for .docx -- .txt/.md keep the raw source, since .md in particular is
+    // only meaningful as actual Markdown text.
+    private func exportText(_ text: String, as format: ExportFormat, suffix: String, isMarkdown: Bool) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [format.contentType]
         let baseName = viewModel.selectedFileURL?.deletingPathExtension().lastPathComponent ?? "transcript"
@@ -657,7 +660,11 @@ struct ContentView: View {
             case .text, .markdown:
                 try text.write(to: url, atomically: true, encoding: .utf8)
             case .docx:
-                try DocxExporter.export(text: text, to: url)
+                if isMarkdown {
+                    try DocxExporter.export(attributed: MarkdownRenderer.render(text), to: url)
+                } else {
+                    try DocxExporter.export(text: text, to: url)
+                }
             }
         } catch {
             showExportError = true

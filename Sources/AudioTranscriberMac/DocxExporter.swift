@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 enum DocxExportError: Error {
@@ -6,14 +7,26 @@ enum DocxExportError: Error {
 
 /// Swift has no equivalent of python-docx. A .docx file is just a ZIP
 /// archive of a small set of OOXML (WordprocessingML) XML files -- this
-/// builds the minimal valid set by hand (one paragraph per line, no rich
-/// formatting) and shells out to the system's /usr/bin/zip to produce the
-/// archive, rather than adding a new SPM dependency just for ZIP writing.
-/// /usr/bin/zip ships with macOS itself (not just Xcode Command Line
-/// Tools), so this has no extra toolchain requirement beyond what's
-/// already needed to run the app at all.
+/// builds the minimal valid set by hand and shells out to the system's
+/// /usr/bin/zip to produce the archive, rather than adding a new SPM
+/// dependency just for ZIP writing. /usr/bin/zip ships with macOS itself
+/// (not just Xcode Command Line Tools), so this has no extra toolchain
+/// requirement beyond what's already needed to run the app at all.
 enum DocxExporter {
     static func export(text: String, to destinationURL: URL) throws {
+        try write(documentXML: documentXML(forPlainText: text), to: destinationURL)
+    }
+
+    /// Exports real Word formatting (bold/italic headings, monospaced code,
+    /// strikethrough, indentation) derived from an NSAttributedString --
+    /// used for the Report & Summary/Translation tabs' rendered Markdown
+    /// (see MarkdownRenderer.swift), rather than writing their literal "#"/
+    /// "**" source characters as plain text.
+    static func export(attributed: NSAttributedString, to destinationURL: URL) throws {
+        try write(documentXML: documentXML(for: attributed), to: destinationURL)
+    }
+
+    private static func write(documentXML: String, to destinationURL: URL) throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let wordDir = tempDir.appendingPathComponent("word", isDirectory: true)
@@ -27,7 +40,7 @@ enum DocxExporter {
             to: tempDir.appendingPathComponent("[Content_Types].xml"), atomically: true, encoding: .utf8
         )
         try rootRelsXML.write(to: relsDir.appendingPathComponent(".rels"), atomically: true, encoding: .utf8)
-        try documentXML(for: text).write(
+        try documentXML.write(
             to: wordDir.appendingPathComponent("document.xml"), atomically: true, encoding: .utf8
         )
 
@@ -69,21 +82,85 @@ enum DocxExporter {
         </Relationships>
         """
 
-    private static func documentXML(for text: String) -> String {
+    private static func documentXML(forPlainText text: String) -> String {
         let paragraphs = text
             .components(separatedBy: "\n")
             .map { "<w:p><w:r><w:t xml:space=\"preserve\">\(escapeXML($0))</w:t></w:r></w:p>" }
             .joined()
+        return wrapBody(paragraphs)
+    }
 
-        return """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-            <w:body>
-            \(paragraphs)
-            <w:sectPr/>
-            </w:body>
-            </w:document>
-            """
+    private static func documentXML(for attributed: NSAttributedString) -> String {
+        let fullText = attributed.string as NSString
+        var paragraphsXML = ""
+        var searchStart = 0
+
+        // Split on the real "\n" characters MarkdownRenderer inserts
+        // between blocks, each becoming its own <w:p>. attributedSubstring
+        // keeps each paragraph's own run attributes for paragraphXML to
+        // read.
+        while searchStart <= fullText.length {
+            let rest = NSRange(location: searchStart, length: fullText.length - searchStart)
+            let newlineRange = fullText.range(of: "\n", range: rest)
+            let paragraphRange: NSRange
+            if newlineRange.location == NSNotFound {
+                paragraphRange = rest
+                searchStart = fullText.length + 1
+            } else {
+                paragraphRange = NSRange(location: searchStart, length: newlineRange.location - searchStart)
+                searchStart = newlineRange.location + 1
+            }
+            paragraphsXML += paragraphXML(for: attributed.attributedSubstring(from: paragraphRange))
+        }
+
+        return wrapBody(paragraphsXML)
+    }
+
+    private static func paragraphXML(for paragraph: NSAttributedString) -> String {
+        guard paragraph.length > 0 else {
+            return "<w:p><w:r><w:t xml:space=\"preserve\"></w:t></w:r></w:p>"
+        }
+
+        var runsXML = ""
+        paragraph.enumerateAttributes(in: NSRange(location: 0, length: paragraph.length)) { attributes, range, _ in
+            let text = (paragraph.string as NSString).substring(with: range)
+            runsXML += runXML(text: text, attributes: attributes)
+        }
+
+        let indent = (paragraph.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.headIndent
+        let pPr = indent.map { "<w:pPr><w:ind w:left=\"\(Int(($0 * 20).rounded()))\"/></w:pPr>" } ?? ""
+        return "<w:p>\(pPr)\(runsXML)</w:p>"
+    }
+
+    private static func runXML(text: String, attributes: [NSAttributedString.Key: Any]) -> String {
+        var runProps = ""
+        if let font = attributes[.font] as? NSFont {
+            let traits = NSFontManager.shared.traits(of: font)
+            if traits.contains(.boldFontMask) { runProps += "<w:b/>" }
+            if traits.contains(.italicFontMask) { runProps += "<w:i/>" }
+            if traits.contains(.fixedPitchFontMask) {
+                runProps += "<w:rFonts w:ascii=\"Courier New\" w:hAnsi=\"Courier New\"/>"
+            }
+            // Word run sizes are in half-points.
+            runProps += "<w:sz w:val=\"\(Int((font.pointSize * 2).rounded()))\"/>"
+        }
+        if attributes[.strikethroughStyle] != nil {
+            runProps += "<w:strike/>"
+        }
+        let rPr = runProps.isEmpty ? "" : "<w:rPr>\(runProps)</w:rPr>"
+        return "<w:r>\(rPr)<w:t xml:space=\"preserve\">\(escapeXML(text))</w:t></w:r>"
+    }
+
+    private static func wrapBody(_ paragraphsXML: String) -> String {
+        """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:body>
+        \(paragraphsXML)
+        <w:sectPr/>
+        </w:body>
+        </w:document>
+        """
     }
 
     // Order matters: '&' must be escaped first, or the entities below
