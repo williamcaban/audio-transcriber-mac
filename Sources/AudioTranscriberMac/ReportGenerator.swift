@@ -1,51 +1,23 @@
-import FoundationModels
-
 enum ReportGeneratorError: Error {
-    case unavailable(String)
-    case guardrailFlagged
-    case contentTooLong
+    case generationFailed(String)
 }
 
-/// Generates a prose report and summary from a transcript using Apple's
-/// on-device Foundation Models framework (macOS 26+, "Apple Intelligence").
-///
-/// Unlike speech-swift, there's no public source to read for this
-/// framework, so its shape here is reconstructed from Apple's WWDC25
-/// sessions/documentation rather than verified against real source --
-/// the same risk class as AppleNativeTranscriber.swift, which needed one
-/// real fix on its first CI compile. Expect the same here if a detail
-/// (an enum case name, an initializer shape) turns out wrong.
+/// Generates a prose report and summary from a transcript using the shared
+/// local on-device LLM (see LocalLLM.swift), replacing an earlier
+/// implementation built on Apple's Foundation Models framework -- which had
+/// two real, reported problems: a mandatory, non-configurable content-
+/// safety guardrail that flagged ordinary transcripts, and a hard
+/// 4096-token context window that failed outright on normal-length
+/// recordings. The local model has a much larger context window, but the
+/// map-reduce chunking below is kept as a safety net for very long files
+/// (there's no public tokenizer here to count exactly ahead of time).
 enum ReportGenerator {
-    // A real failure on real hardware revealed a hard ~4096-token context
-    // window shared across instructions + prompt + the generated response
-    // -- hit by an ordinary ~15-20 minute recording (7889 tokens), not just
-    // extreme edge cases. There's no public tokenizer available here to
-    // count exactly, so this uses a deliberately conservative
-    // characters-per-chunk budget: well under a naive English-only
-    // estimate, specifically to leave headroom for less token-efficient
-    // scripts (CJK, Thai, etc, which can run closer to 1-2 characters per
-    // token rather than English's ~4) plus the instructions/prompt wrapper
-    // and the response itself.
-    private static let maxChunkCharacters = 3000
-
-    /// Checked at generation time rather than assumed, so unavailability
-    /// (ineligible hardware, Apple Intelligence disabled, or the on-device
-    /// model still downloading) is surfaced honestly instead of silently
-    /// failing or producing a fake result.
-    static func unavailabilityReason() -> String? {
-        switch SystemLanguageModel.default.availability {
-        case .available:
-            return nil
-        case .unavailable(.deviceNotEligible):
-            return "This Mac doesn't support Apple Intelligence."
-        case .unavailable(.appleIntelligenceNotEnabled):
-            return "Apple Intelligence is turned off. Enable it in System Settings > Apple Intelligence & Siri."
-        case .unavailable(.modelNotReady):
-            return "Apple Intelligence's on-device model isn't ready yet. Try again shortly."
-        case .unavailable:
-            return "Apple Intelligence isn't available on this Mac right now."
-        }
-    }
+    // Generous relative to the local model's much larger context window
+    // (vs. Apple's hard 4096-token limit that originally forced a tight
+    // budget here) -- kept well short of it regardless, to leave headroom
+    // for less token-efficient scripts (CJK, Thai, etc) plus the
+    // instructions/prompt wrapper and the response itself.
+    private static let maxChunkCharacters = 20000
 
     /// Generates the final two-part summary + prose report. Transcripts
     /// that fit in one model call go straight through; longer ones are
@@ -53,33 +25,46 @@ enum ReportGenerator {
     /// combined (recursively, if even the combined summaries are still too
     /// large) before the final report is written. Same bounded-window-
     /// chunking shape already used for Qwen3-ASR's fixed audio window,
-    /// just applied to this model's fixed context window instead.
+    /// just applied to this model's (much larger, but still finite)
+    /// context window instead.
     static func generateReport(
         from transcript: String,
         onStatusUpdate: (@Sendable (String) -> Void)? = nil
     ) async throws -> String {
-        if let reason = unavailabilityReason() {
-            throw ReportGeneratorError.unavailable(reason)
-        }
+        do {
+            // Loaded eagerly, with its own status, before any chunking or
+            // summarization work -- otherwise the ~2.3GB download would
+            // happen silently inside whichever call happens to trigger it
+            // first (summarizeChunk for a long transcript, writeReport for
+            // a short one), looking stuck with no visible progress. Exactly
+            // the class of bug already hit and fixed once for Qwen3-ASR.
+            _ = try await LocalLLM.loadContainer { progress, message in
+                onStatusUpdate?(progress > 0 ? "\(message) (\(Int(progress * 100))%)" : message)
+            }
 
-        let chunks = chunkText(transcript)
-        guard chunks.count > 1 else {
+            let chunks = chunkText(transcript)
+            guard chunks.count > 1 else {
+                onStatusUpdate?("Writing report...")
+                return try await writeReport(from: transcript)
+            }
+
+            var partialSummaries: [String] = []
+            for (index, chunk) in chunks.enumerated() {
+                try Task.checkCancellation()
+                onStatusUpdate?("Summarizing part \(index + 1) of \(chunks.count)...")
+                partialSummaries.append(try await summarizeChunk(chunk))
+            }
+
+            onStatusUpdate?("Combining summaries...")
+            let condensed = try await reduceToFit(partialSummaries)
+
             onStatusUpdate?("Writing report...")
-            return try await writeReport(from: transcript)
+            return try await writeReport(from: condensed)
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            throw ReportGeneratorError.generationFailed("\(error)")
         }
-
-        var partialSummaries: [String] = []
-        for (index, chunk) in chunks.enumerated() {
-            try Task.checkCancellation()
-            onStatusUpdate?("Summarizing part \(index + 1) of \(chunks.count)...")
-            partialSummaries.append(try await summarizeChunk(chunk))
-        }
-
-        onStatusUpdate?("Combining summaries...")
-        let condensed = try await reduceToFit(partialSummaries)
-
-        onStatusUpdate?("Writing report...")
-        return try await writeReport(from: condensed)
     }
 
     private static func chunkText(_ text: String) -> [String] {
@@ -130,63 +115,36 @@ enum ReportGenerator {
     }
 
     private static func summarizeChunk(_ chunk: String) async throws -> String {
-        let session = LanguageModelSession(
+        try await LocalLLM.respond(
             instructions: """
             You extract the key points from part of a longer transcript or \
             set of summaries. Respond with concise bullet points only, in \
             the same language as the text. This is only one part of a \
             larger whole, so don't summarize it as if it were complete on \
             its own.
-            """
+            """,
+            prompt: "Content:\n\(chunk)"
         )
-        return try await respond(session: session, prompt: "Content:\n\(chunk)")
     }
 
     private static func writeReport(from content: String) async throws -> String {
-        let session = LanguageModelSession(
+        try await LocalLLM.respond(
             instructions: """
             You write clear, well-organized prose reports and summaries from \
             spoken-word transcripts -- sermons, classes, movies, reviews, \
             meetings, and similar recordings. Always respond in the same \
             language as the source material.
+            """,
+            prompt: """
+            Write a report of the following in two parts, in this order:
+
+            1. A descriptive summary highlighting the important points or ideas.
+            2. A more detailed prose report capturing the important ideas, in \
+            full paragraphs.
+
+            Content:
+            \(content)
             """
         )
-        let prompt = """
-        Write a report of the following in two parts, in this order:
-
-        1. A descriptive summary highlighting the important points or ideas.
-        2. A more detailed prose report capturing the important ideas, in \
-        full paragraphs.
-
-        Content:
-        \(content)
-        """
-        return try await respond(session: session, prompt: prompt)
-    }
-
-    private static func respond(session: LanguageModelSession, prompt: String) async throws -> String {
-        do {
-            let response = try await session.respond(to: prompt)
-            return response.content
-        } catch let error as LanguageModelSession.GenerationError {
-            // Apple's on-device model has a built-in content-safety
-            // guardrail that can flag the prompt or the response even for
-            // ordinary transcripts (a real, observed case: a personal
-            // family recording discussing relationships/religion). There's
-            // no supported way to disable it -- surfaced as its own case so
-            // the UI can give an honest, actionable message instead of a
-            // raw technical error string.
-            if case .guardrailViolation = error {
-                throw ReportGeneratorError.guardrailFlagged
-            }
-            // Defense in depth: chunking above should keep every real call
-            // well under the context limit, but if a language's actual
-            // tokenization turns out denser than our character-based
-            // estimate assumed, surface it cleanly rather than crash.
-            if case .exceededContextWindowSize = error {
-                throw ReportGeneratorError.contentTooLong
-            }
-            throw error
-        }
     }
 }
