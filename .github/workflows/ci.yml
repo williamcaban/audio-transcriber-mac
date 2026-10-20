@@ -8,13 +8,29 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # Not macos-latest: that still points to a macOS 26/Xcode 26.6 image as
+    # of 2026-10-20 (GitHub's xcode-27 image only reached GA on 2026-10-15),
+    # whose `swift build` silently fails to compile MLX's .metal shader
+    # sources into default.metallib -- confirmed on real runs, not guessed,
+    # after both downloading Xcode's separate Metal Toolchain component and
+    # forcing --build-system swiftbuild independently failed to fix it (the
+    # latter also broke an unrelated dependency's compile on that older
+    # toolchain). xcode-27 matches the toolchain generation already verified
+    # working locally.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Show toolchain versions
         run: |
           swift --version
           xcodebuild -version
+      # Kept as a defensive step even on an image that should already have
+      # it, since it's idempotent and cheap (confirmed locally: a no-op
+      # when already installed). This is what's actually needed to compile
+      # MLX's Metal shaders into default.metallib; see the runs-on comment
+      # above for the fuller story of what didn't work.
+      - name: Download Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
       - name: Build
         run: swift build -v
       - name: Build .app bundle
@@ -24,4 +40,22 @@ jobs:
           APP="dist/Audio Transcriber.app"
           test -f "$APP/Contents/MacOS/AudioTranscriberMac"
           test -f "$APP/Contents/Info.plist"
+          test -f "$APP/Contents/MacOS/mlx.metallib"
           plutil -lint "$APP/Contents/Info.plist"
+      # The structure check above only proves the files exist -- this
+      # actually launches the app and confirms it doesn't immediately exit,
+      # which is exactly the failure mode a missing/broken Metal shader
+      # library (or any other startup crash) causes and the structure check
+      # alone can't catch. This is the check that was missing when v0.1.0
+      # and v0.1.1 both shipped broken.
+      - name: Launch smoke test
+        run: |
+          "dist/Audio Transcriber.app/Contents/MacOS/AudioTranscriberMac" > launch.log 2>&1 &
+          PID=$!
+          sleep 5
+          if ! kill -0 $PID 2>/dev/null; then
+            echo "App exited within 5s of launching:"
+            cat launch.log
+            exit 1
+          fi
+          kill $PID
