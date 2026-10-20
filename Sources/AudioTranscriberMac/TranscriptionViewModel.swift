@@ -19,6 +19,10 @@ final class TranscriptionViewModel {
     var isTranscribing = false
     var lastMetadata: TranscriptionMetadata?
 
+    var reportText = ""
+    var isGeneratingReport = false
+    var reportErrorMessage: String?
+
     var qwen3LoadState: BackendLoadState = .notLoaded
     var appleLoadState: BackendLoadState = .notLoaded
 
@@ -116,6 +120,28 @@ final class TranscriptionViewModel {
 
     func cancelTranscription() {
         currentTask?.cancel()
+    }
+
+    var canGenerateReport: Bool {
+        !transcript.isEmpty && !isGeneratingReport
+    }
+
+    func generateReport() {
+        guard canGenerateReport else { return }
+        isGeneratingReport = true
+        reportErrorMessage = nil
+        let transcriptSnapshot = transcript
+
+        Task {
+            do {
+                reportText = try await ReportGenerator.generateReport(from: transcriptSnapshot)
+            } catch ReportGeneratorError.unavailable(let message) {
+                reportErrorMessage = message
+            } catch {
+                reportErrorMessage = "Error: \(error)"
+            }
+            isGeneratingReport = false
+        }
     }
 
     private func prepareQwen3() {

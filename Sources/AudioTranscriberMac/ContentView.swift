@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var showDetails = false
     @State private var showSettings = false
     @State private var isSpellCheckingEnabled = false
+    @State private var selectedTab: ContentTab = .transcript
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -20,7 +21,14 @@ struct ContentView: View {
             languagePicker
             actionBar
             statusBar
-            transcriptCard
+            TabView(selection: $selectedTab) {
+                transcriptTab
+                    .tabItem { Label("Transcript", systemImage: "text.alignleft") }
+                    .tag(ContentTab.transcript)
+                reportTab
+                    .tabItem { Label("Report & Summary", systemImage: "doc.text") }
+                    .tag(ContentTab.report)
+            }
             if showDetails, let metadata = viewModel.lastMetadata {
                 detailsCard(metadata)
             }
@@ -283,26 +291,6 @@ struct ContentView: View {
             }
             .toggleStyle(.button)
             .controlSize(.large)
-
-            Button {
-                copyTranscript()
-            } label: {
-                Label("Copy", systemImage: "doc.on.doc")
-            }
-            .controlSize(.large)
-            .disabled(viewModel.transcript.isEmpty)
-
-            Menu {
-                ForEach(ExportFormat.allCases) { format in
-                    Button("\(format.rawValue) (.\(format.fileExtension))") {
-                        exportTranscript(as: format)
-                    }
-                }
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.down")
-            }
-            .controlSize(.large)
-            .disabled(viewModel.transcript.isEmpty)
         }
     }
 
@@ -323,6 +311,17 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var transcriptTab: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Spacer()
+                copyExportControls(text: viewModel.transcript, exportSuffix: "")
+            }
+            transcriptCard
+        }
+        .padding(.top, 8)
     }
 
     private var transcriptCard: some View {
@@ -348,6 +347,92 @@ struct ContentView: View {
                 .strokeBorder(Color.secondary.opacity(0.2))
         )
         .frame(maxHeight: .infinity)
+    }
+
+    // Generates from the Transcript tab's text via Apple's on-device
+    // Foundation Models framework. A separate "Generate" step (rather than
+    // automatic) since this is a real, non-instant on-device inference
+    // call, not something to fire implicitly every time the transcript
+    // changes.
+    private var reportTab: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Button {
+                    viewModel.generateReport()
+                } label: {
+                    Label(
+                        viewModel.isGeneratingReport ? "Generating..." : "Generate Report",
+                        systemImage: "doc.text.magnifyingglass"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!viewModel.canGenerateReport)
+
+                if viewModel.isGeneratingReport {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Spacer()
+                copyExportControls(text: viewModel.reportText, exportSuffix: "-report")
+            }
+            if let message = viewModel.reportErrorMessage {
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
+            reportCard
+        }
+        .padding(.top, 8)
+    }
+
+    private var reportCard: some View {
+        ZStack(alignment: .topLeading) {
+            WordProcessorTextView(
+                text: $viewModel.reportText,
+                isSpellCheckingEnabled: isSpellCheckingEnabled,
+                spellCheckLanguageCode: viewModel.spellCheckLanguageCode
+            )
+            if viewModel.reportText.isEmpty {
+                Text("Generate a report to see a summary and prose report of the transcript here. You can edit it directly.")
+                    .foregroundStyle(.secondary)
+                    .padding(20)
+                    .allowsHitTesting(false)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.2))
+        )
+        .frame(maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func copyExportControls(text: String, exportSuffix: String) -> some View {
+        Button {
+            copyToPasteboard(text)
+        } label: {
+            Label("Copy", systemImage: "doc.on.doc")
+        }
+        .controlSize(.large)
+        .disabled(text.isEmpty)
+
+        Menu {
+            ForEach(ExportFormat.allCases) { format in
+                Button("\(format.rawValue) (.\(format.fileExtension))") {
+                    exportText(text, as: format, suffix: exportSuffix)
+                }
+            }
+        } label: {
+            Label("Export", systemImage: "square.and.arrow.down")
+        }
+        .controlSize(.large)
+        .disabled(text.isEmpty)
     }
 
     private func detailsCard(_ metadata: TranscriptionMetadata) -> some View {
@@ -421,27 +506,27 @@ struct ContentView: View {
         }
     }
 
-    private func copyTranscript() {
+    private func copyToPasteboard(_ text: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(viewModel.transcript, forType: .string)
+        pasteboard.setString(text, forType: .string)
     }
 
     // .docx already opens natively in Pages -- no separate Pages-specific
     // export format needed to cover that case.
-    private func exportTranscript(as format: ExportFormat) {
+    private func exportText(_ text: String, as format: ExportFormat, suffix: String) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [format.contentType]
         let baseName = viewModel.selectedFileURL?.deletingPathExtension().lastPathComponent ?? "transcript"
-        panel.nameFieldStringValue = "\(baseName).\(format.fileExtension)"
+        panel.nameFieldStringValue = "\(baseName)\(suffix).\(format.fileExtension)"
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             switch format {
             case .text, .markdown:
-                try viewModel.transcript.write(to: url, atomically: true, encoding: .utf8)
+                try text.write(to: url, atomically: true, encoding: .utf8)
             case .docx:
-                try DocxExporter.export(text: viewModel.transcript, to: url)
+                try DocxExporter.export(text: text, to: url)
             }
         } catch {
             showExportError = true
