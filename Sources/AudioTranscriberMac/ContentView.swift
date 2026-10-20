@@ -36,9 +36,6 @@ struct ContentView: View {
                 case .report: reportTab
                 }
             }
-            if showDetails, let metadata = viewModel.lastMetadata {
-                detailsCard(metadata)
-            }
         }
         .padding(24)
         .frame(minWidth: 680, minHeight: 580)
@@ -282,22 +279,6 @@ struct ContentView: View {
                 }
                 .controlSize(.large)
             }
-
-            Spacer()
-
-            Button {
-                showDetails.toggle()
-            } label: {
-                Label("Details", systemImage: "info.circle")
-            }
-            .controlSize(.large)
-            .disabled(viewModel.lastMetadata == nil)
-
-            Toggle(isOn: $isSpellCheckingEnabled) {
-                Label("Spell Check", systemImage: "checkmark.bubble")
-            }
-            .toggleStyle(.button)
-            .controlSize(.large)
         }
     }
 
@@ -334,10 +315,12 @@ struct ContentView: View {
     private var transcriptTab: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                Spacer()
-                copyExportControls(text: viewModel.transcript, exportSuffix: "")
+                tabToolbar(text: viewModel.transcript, exportSuffix: "")
             }
             transcriptCard
+            if showDetails, let metadata = viewModel.lastMetadata {
+                detailsCard(metadata)
+            }
         }
         .padding(.top, 8)
     }
@@ -392,8 +375,7 @@ struct ContentView: View {
                         .controlSize(.small)
                 }
 
-                Spacer()
-                copyExportControls(text: viewModel.reportText, exportSuffix: "-report")
+                tabToolbar(text: viewModel.reportText, exportSuffix: "-report")
             }
             if viewModel.isGeneratingReport, let status = viewModel.reportStatusMessage {
                 Text(status)
@@ -406,6 +388,9 @@ struct ContentView: View {
                     .foregroundStyle(.orange)
             }
             reportCard
+            if showDetails, let metadata = viewModel.lastMetadata {
+                detailsCard(metadata)
+            }
         }
         .padding(.top, 8)
     }
@@ -435,8 +420,29 @@ struct ContentView: View {
         .frame(maxHeight: .infinity)
     }
 
+    // Shared by both tabs: Details and Spell Check used to live in the
+    // single global action bar above the tab switcher, but that made them
+    // feel disconnected from the content they actually act on -- moved
+    // into this per-tab toolbar instead, identical in shape on both tabs
+    // for consistency, parameterized only by which text Copy/Export apply to.
     @ViewBuilder
-    private func copyExportControls(text: String, exportSuffix: String) -> some View {
+    private func tabToolbar(text: String, exportSuffix: String) -> some View {
+        Button {
+            showDetails.toggle()
+        } label: {
+            Label("Details", systemImage: "info.circle")
+        }
+        .controlSize(.large)
+        .disabled(viewModel.lastMetadata == nil)
+
+        Toggle(isOn: $isSpellCheckingEnabled) {
+            Label("Spell Check", systemImage: "checkmark.bubble")
+        }
+        .toggleStyle(.button)
+        .controlSize(.large)
+
+        Spacer()
+
         Button {
             copyToPasteboard(text)
         } label: {
