@@ -60,19 +60,32 @@ jobs:
 
       # Hardened Runtime (required for notarization) rejects any
       # dynamically-linked binary not signed by our own team identity --
-      # sign nested dylibs/frameworks/bundles (MLX's own compiled Metal
-      # shader bundle in particular) before the main executable and the app
-      # bundle itself, same inside-out order codesign expects. See
+      # sign nested dylibs/frameworks/bundles before the main executable and
+      # the app bundle itself, same inside-out order codesign expects. See
       # scripts/AudioTranscriberMac.entitlements for why
       # disable-library-validation is also needed for this exact class of
       # dependency.
+      #
+      # Only items that actually contain a Mach-O binary get signed --
+      # confirmed via a real failed run, not guessed: SPM's plain resource
+      # bundles (tokenizer configs, a .wav fixture, even MLX's own
+      # default.metallib, which isn't Mach-O) have no CFBundleExecutable and
+      # codesign rejects them outright ("bundle format unrecognized, invalid,
+      # or unsuitable") when signing with a real Developer ID identity +
+      # --timestamp, even though plain ad-hoc signing them locally raised no
+      # error at all. They don't need their own signature anyway -- the
+      # final whole-app codesign call below seals all resources as part of
+      # its own signature.
       - name: Code sign app bundle
         run: |
           set -euo pipefail
           APP="dist/Audio Transcriber.app"
 
-          find "$APP" \( -name "*.dylib" -o -name "*.framework" -o -name "*.bundle" \) -print0 |
-            xargs -0 -I{} codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "{}"
+          while IFS= read -r -d '' item; do
+            if find "$item" -type f -exec file {} \; | grep -q "Mach-O"; then
+              codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$item"
+            fi
+          done < <(find "$APP" \( -name "*.dylib" -o -name "*.framework" -o -name "*.bundle" \) -print0)
 
           codesign --force --options runtime --timestamp \
             --entitlements scripts/AudioTranscriberMac.entitlements \
