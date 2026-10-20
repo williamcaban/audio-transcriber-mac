@@ -8,30 +8,31 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # Not macos-latest: that still points to a macOS 26/Xcode 26.6 image as
+    # of 2026-10-20 (GitHub's xcode-27 image only reached GA on 2026-10-15),
+    # whose `swift build` silently fails to compile MLX's .metal shader
+    # sources into default.metallib -- confirmed on real runs, not guessed,
+    # after both downloading Xcode's separate Metal Toolchain component and
+    # forcing --build-system swiftbuild independently failed to fix it (the
+    # latter also broke an unrelated dependency's compile on that older
+    # toolchain). xcode-27 matches the toolchain generation already verified
+    # working locally.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Show toolchain versions
         run: |
           swift --version
           xcodebuild -version
-          swift build --help | grep -A4 -- '--build-system'
-      # Xcode 26+ ships the Metal shader compiler as a separate, on-demand
-      # component rather than bundled by default. This alone turned out NOT
-      # to fix MLX's Metal kernels silently failing to compile into
-      # default.metallib (verified on a real run: this step succeeded, the
-      # metallib was still missing) -- kept anyway since mlx-swift's own CI
-      # explicitly checks for it the same way
-      # (`xcodebuild -showComponent MetalToolchain`) and it's a legitimate
-      # prerequisite regardless. The `--build-system swiftbuild` flag below
-      # is the next (also unconfirmed-on-CI) hypothesis: this machine's
-      # Swift 6.4 defaults `swift build` to the newer "swiftbuild" engine,
-      # which does compile the kernels; CI's Swift 6.3.3 may default to the
-      # legacy "native" engine, which doesn't.
+      # Kept as a defensive step even on an image that should already have
+      # it, since it's idempotent and cheap (confirmed locally: a no-op
+      # when already installed). This is what's actually needed to compile
+      # MLX's Metal shaders into default.metallib; see the runs-on comment
+      # above for the fuller story of what didn't work.
       - name: Download Metal toolchain
         run: xcodebuild -downloadComponent MetalToolchain
       - name: Build
-        run: swift build --build-system swiftbuild -v
+        run: swift build -v
       - name: Build .app bundle
         run: ./scripts/bundle-app.sh
       - name: Verify .app bundle structure
@@ -43,9 +44,10 @@ jobs:
           plutil -lint "$APP/Contents/Info.plist"
       # The structure check above only proves the files exist -- this
       # actually launches the app and confirms it doesn't immediately exit,
-      # which is exactly the failure mode a missing Metal toolchain (or any
-      # other startup crash) causes and the structure check alone can't
-      # catch.
+      # which is exactly the failure mode a missing/broken Metal shader
+      # library (or any other startup crash) causes and the structure check
+      # alone can't catch. This is the check that was missing when v0.1.0
+      # and v0.1.1 both shipped broken.
       - name: Launch smoke test
         run: |
           "dist/Audio Transcriber.app/Contents/MacOS/AudioTranscriberMac" > launch.log 2>&1 &

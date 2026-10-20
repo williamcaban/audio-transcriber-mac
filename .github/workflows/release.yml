@@ -12,7 +12,9 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-latest
+    # See ci.yml's comment: macos-latest still means macOS 26/Xcode 26.6 as
+    # of 2026-10-20, which can't produce a working build of this app.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -20,12 +22,9 @@ jobs:
       # while silently missing MLX's compiled default.metallib (no build
       # error at all), crashing on launch with "MLX error: Failed to load
       # the default metallib" -- none of codesign/notarize touches whether
-      # the metallib was ever produced. Downloading Xcode's separate Metal
-      # Toolchain component alone didn't fix it (verified on a real run);
-      # scripts/bundle-app.sh now also forces the "swiftbuild" build engine
-      # explicitly, the other candidate explanation. Kept as a prerequisite
-      # regardless -- see that script's comment for the details and current
-      # confidence level on each.
+      # the metallib was ever produced. Root cause was the runner's Xcode
+      # version (see the runs-on comment above); this step is kept as a
+      # defensive, idempotent prerequisite regardless.
       - name: Download Metal toolchain
         run: xcodebuild -downloadComponent MetalToolchain
 
