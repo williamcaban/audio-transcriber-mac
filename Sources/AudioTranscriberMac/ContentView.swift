@@ -21,13 +21,20 @@ struct ContentView: View {
             languagePicker
             actionBar
             statusBar
-            TabView(selection: $selectedTab) {
-                transcriptTab
-                    .tabItem { Label("Transcript", systemImage: "text.alignleft") }
-                    .tag(ContentTab.transcript)
-                reportTab
-                    .tabItem { Label("Report & Summary", systemImage: "doc.text") }
-                    .tag(ContentTab.report)
+            // A plain Picker/segmented control rather than SwiftUI's
+            // TabView: on recent macOS, TabView(selection:) inside a
+            // WindowGroup renders as a title-bar-integrated tab picker (the
+            // pill next to the traffic lights), which looks like an
+            // independent, always-available screen rather than output tied
+            // to the one transcription workflow above it -- a real,
+            // reported point of confusion. This keeps the tab switcher
+            // visually anchored right where the content it controls is.
+            outputTabPicker
+            Group {
+                switch selectedTab {
+                case .transcript: transcriptTab
+                case .report: reportTab
+                }
             }
             if showDetails, let metadata = viewModel.lastMetadata {
                 detailsCard(metadata)
@@ -313,6 +320,17 @@ struct ContentView: View {
         }
     }
 
+    private var outputTabPicker: some View {
+        Picker("", selection: $selectedTab) {
+            ForEach(ContentTab.allCases) { tab in
+                Text(tab.rawValue).tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(maxWidth: 360)
+    }
+
     private var transcriptTab: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
@@ -361,7 +379,7 @@ struct ContentView: View {
                     viewModel.generateReport()
                 } label: {
                     Label(
-                        viewModel.isGeneratingReport ? "Generating..." : "Generate Report",
+                        viewModel.isGeneratingReport ? "Generating..." : "Generate Summary",
                         systemImage: "doc.text.magnifyingglass"
                     )
                 }
@@ -395,7 +413,7 @@ struct ContentView: View {
                 spellCheckLanguageCode: viewModel.spellCheckLanguageCode
             )
             if viewModel.reportText.isEmpty {
-                Text("Generate a report to see a summary and prose report of the transcript here. You can edit it directly.")
+                Text("Click Generate Summary to see a summary and prose report of the transcript here. You can edit it directly.")
                     .foregroundStyle(.secondary)
                     .padding(20)
                     .allowsHitTesting(false)

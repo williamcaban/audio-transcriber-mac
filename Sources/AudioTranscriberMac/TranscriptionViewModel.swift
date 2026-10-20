@@ -137,6 +137,8 @@ final class TranscriptionViewModel {
                 reportText = try await ReportGenerator.generateReport(from: transcriptSnapshot)
             } catch ReportGeneratorError.unavailable(let message) {
                 reportErrorMessage = message
+            } catch ReportGeneratorError.guardrailFlagged {
+                reportErrorMessage = "Apple's on-device safety filter flagged this transcript and couldn't generate a summary. This can happen even with ordinary content -- you can write the summary manually in this tab, or try again."
             } catch {
                 reportErrorMessage = "Error: \(error)"
             }

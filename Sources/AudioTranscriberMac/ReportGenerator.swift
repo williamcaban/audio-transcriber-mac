@@ -2,6 +2,7 @@ import FoundationModels
 
 enum ReportGeneratorError: Error {
     case unavailable(String)
+    case guardrailFlagged
 }
 
 /// Generates a prose report and summary from a transcript using Apple's
@@ -58,7 +59,21 @@ enum ReportGenerator {
         \(transcript)
         """
 
-        let response = try await session.respond(to: prompt)
-        return response.content
+        do {
+            let response = try await session.respond(to: prompt)
+            return response.content
+        } catch let error as LanguageModelSession.GenerationError {
+            // Apple's on-device model has a built-in content-safety
+            // guardrail that can flag the prompt or the response even for
+            // ordinary transcripts (a real, observed case: a personal
+            // family recording discussing relationships/religion). There's
+            // no supported way to disable it -- surfaced as its own case so
+            // the UI can give an honest, actionable message instead of a
+            // raw technical error string.
+            if case .guardrailViolation = error {
+                throw ReportGeneratorError.guardrailFlagged
+            }
+            throw error
+        }
     }
 }
