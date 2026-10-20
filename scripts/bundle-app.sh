@@ -16,8 +16,19 @@ APP_NAME="Audio Transcriber"
 EXECUTABLE_NAME="AudioTranscriberMac"
 CONFIG="release"
 
-swift build -c "$CONFIG"
-BIN_PATH=$(swift build -c "$CONFIG" --show-bin-path)
+# Explicit, not relying on whatever `swift build` defaults to.
+# `swift build --help` shows "swiftbuild" as the default build system on
+# this machine's Swift 6.4 toolchain; CI's Swift 6.3.3 may default
+# differently. This is still a hypothesis being tested, not a confirmed
+# fix -- the confirmed facts are: CI resolves the exact same mlx-swift
+# commit as a working local build, downloading the Metal Toolchain
+# component on CI didn't fix the missing default.metallib, and the only
+# other variable left is the build engine actually used. If this doesn't
+# fix it, the next thing to check is CI's own `swift build --help` output.
+BUILD_SYSTEM_FLAG="--build-system swiftbuild"
+
+swift build $BUILD_SYSTEM_FLAG -c "$CONFIG"
+BIN_PATH=$(swift build $BUILD_SYSTEM_FLAG -c "$CONFIG" --show-bin-path)
 
 rm -rf dist
 APP_BUNDLE="dist/${APP_NAME}.app"

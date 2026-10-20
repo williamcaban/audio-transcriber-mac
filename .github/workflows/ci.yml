@@ -15,19 +15,23 @@ jobs:
         run: |
           swift --version
           xcodebuild -version
+          swift build --help | grep -A4 -- '--build-system'
       # Xcode 26+ ships the Metal shader compiler as a separate, on-demand
-      # component rather than bundled by default -- without this, MLX's
-      # Metal kernels silently fail to compile into default.metallib (no
-      # build error at all, just a missing bundle), and the app then
-      # crashes on launch with "MLX error: Failed to load the default
-      # metallib." Confirmed by comparing a working local build (toolchain
-      # already had this component) against this runner's, and finding
-      # mlx-swift's own CI explicitly checks for it the same way
-      # (`xcodebuild -showComponent MetalToolchain`).
+      # component rather than bundled by default. This alone turned out NOT
+      # to fix MLX's Metal kernels silently failing to compile into
+      # default.metallib (verified on a real run: this step succeeded, the
+      # metallib was still missing) -- kept anyway since mlx-swift's own CI
+      # explicitly checks for it the same way
+      # (`xcodebuild -showComponent MetalToolchain`) and it's a legitimate
+      # prerequisite regardless. The `--build-system swiftbuild` flag below
+      # is the next (also unconfirmed-on-CI) hypothesis: this machine's
+      # Swift 6.4 defaults `swift build` to the newer "swiftbuild" engine,
+      # which does compile the kernels; CI's Swift 6.3.3 may default to the
+      # legacy "native" engine, which doesn't.
       - name: Download Metal toolchain
         run: xcodebuild -downloadComponent MetalToolchain
       - name: Build
-        run: swift build -v
+        run: swift build --build-system swiftbuild -v
       - name: Build .app bundle
         run: ./scripts/bundle-app.sh
       - name: Verify .app bundle structure
