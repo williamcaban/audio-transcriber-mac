@@ -9,7 +9,6 @@ struct ContentView: View {
     @State private var isDropTargeted = false
     @State private var showDetails = false
     @State private var showSettings = false
-    @State private var isSpellCheckingEnabled = false
     @State private var selectedTab: ContentTab = .transcript
 
     var body: some View {
@@ -331,8 +330,9 @@ struct ContentView: View {
     private var transcriptTab: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                tabToolbar(text: viewModel.transcript, exportSuffix: "")
+                tabToolbar(tab: .transcript, text: $viewModel.transcript, exportSuffix: "")
             }
+            cleanupStatus(for: .transcript)
             transcriptCard
             if showDetails, let metadata = viewModel.lastMetadata {
                 detailsCard(metadata)
@@ -343,11 +343,7 @@ struct ContentView: View {
 
     private var transcriptCard: some View {
         ZStack(alignment: .topLeading) {
-            WordProcessorTextView(
-                text: $viewModel.transcript,
-                isSpellCheckingEnabled: isSpellCheckingEnabled,
-                spellCheckLanguageCode: viewModel.spellCheckLanguageCode
-            )
+            WordProcessorTextView(text: $viewModel.transcript)
             if viewModel.transcript.isEmpty {
                 Text("Transcript will appear here. You can edit it directly, including fixing any mistakes.")
                     .foregroundStyle(.secondary)
@@ -391,7 +387,7 @@ struct ContentView: View {
                         .controlSize(.small)
                 }
 
-                tabToolbar(text: viewModel.reportText, exportSuffix: "-report")
+                tabToolbar(tab: .report, text: $viewModel.reportText, exportSuffix: "-report")
             }
             if viewModel.isGeneratingReport, let status = viewModel.reportStatusMessage {
                 Text(status)
@@ -403,6 +399,7 @@ struct ContentView: View {
                     .font(.callout)
                     .foregroundStyle(.orange)
             }
+            cleanupStatus(for: .report)
             reportCard
             if showDetails, let metadata = viewModel.lastMetadata {
                 detailsCard(metadata)
@@ -413,11 +410,7 @@ struct ContentView: View {
 
     private var reportCard: some View {
         ZStack(alignment: .topLeading) {
-            WordProcessorTextView(
-                text: $viewModel.reportText,
-                isSpellCheckingEnabled: isSpellCheckingEnabled,
-                spellCheckLanguageCode: viewModel.spellCheckLanguageCode
-            )
+            WordProcessorTextView(text: $viewModel.reportText)
             if viewModel.reportText.isEmpty {
                 Text("Click Generate Summary to see a summary and prose report of the transcript here. You can edit it directly.")
                     .foregroundStyle(.secondary)
@@ -466,7 +459,7 @@ struct ContentView: View {
                         .controlSize(.small)
                 }
 
-                tabToolbar(text: viewModel.translatedText, exportSuffix: "-translated")
+                tabToolbar(tab: .translation, text: $viewModel.translatedText, exportSuffix: "-translated")
             }
             if viewModel.isTranslating, let status = viewModel.translationStatusMessage {
                 Text(status)
@@ -478,6 +471,7 @@ struct ContentView: View {
                     .font(.callout)
                     .foregroundStyle(.orange)
             }
+            cleanupStatus(for: .translation)
             translationCard
             if showDetails, let metadata = viewModel.lastMetadata {
                 detailsCard(metadata)
@@ -488,11 +482,7 @@ struct ContentView: View {
 
     private var translationCard: some View {
         ZStack(alignment: .topLeading) {
-            WordProcessorTextView(
-                text: $viewModel.translatedText,
-                isSpellCheckingEnabled: isSpellCheckingEnabled,
-                spellCheckLanguageCode: viewModel.spellCheckLanguageCode
-            )
+            WordProcessorTextView(text: $viewModel.translatedText)
             if viewModel.translatedText.isEmpty {
                 Text("Pick a language and click Translate to translate the Report & Summary text here. You can edit it directly.")
                     .foregroundStyle(.secondary)
@@ -511,13 +501,16 @@ struct ContentView: View {
         .frame(maxHeight: .infinity)
     }
 
-    // Shared by both tabs: Details and Spell Check used to live in the
+    // Shared by all three tabs: Details and Cleanup used to live in the
     // single global action bar above the tab switcher, but that made them
-    // feel disconnected from the content they actually act on -- moved
-    // into this per-tab toolbar instead, identical in shape on both tabs
-    // for consistency, parameterized only by which text Copy/Export apply to.
+    // feel disconnected from the content they actually act on -- moved into
+    // this per-tab toolbar instead, identical in shape across tabs for
+    // consistency, parameterized only by which text Cleanup/Copy/Export
+    // apply to. `tab` identifies which tab this toolbar belongs to, so the
+    // shared (single-flight) cleanup state can tell its spinner/error apart
+    // from the other tabs'.
     @ViewBuilder
-    private func tabToolbar(text: String, exportSuffix: String) -> some View {
+    private func tabToolbar(tab: ContentTab, text: Binding<String>, exportSuffix: String) -> some View {
         Button {
             showDetails.toggle()
         } label: {
@@ -526,33 +519,55 @@ struct ContentView: View {
         .controlSize(.large)
         .disabled(viewModel.lastMetadata == nil)
 
-        Toggle(isOn: $isSpellCheckingEnabled) {
-            Label("Spell Check", systemImage: "checkmark.bubble")
+        Button {
+            viewModel.cleanUp(tab: tab, text: text.wrappedValue) { text.wrappedValue = $0 }
+        } label: {
+            if viewModel.isCleaningUp, viewModel.cleaningUpTab == tab {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Label("Cleanup", systemImage: "wand.and.stars")
+            }
         }
-        .toggleStyle(.button)
         .controlSize(.large)
+        .disabled(text.wrappedValue.isEmpty || viewModel.isCleaningUp)
+        .help("Fix spelling/grammar and strip stray foreign-script leakage using the on-device AI model")
 
         Spacer()
 
         Button {
-            copyToPasteboard(text)
+            copyToPasteboard(text.wrappedValue)
         } label: {
             Label("Copy", systemImage: "doc.on.doc")
         }
         .controlSize(.large)
-        .disabled(text.isEmpty)
+        .disabled(text.wrappedValue.isEmpty)
 
         Menu {
             ForEach(ExportFormat.allCases) { format in
                 Button("\(format.rawValue) (.\(format.fileExtension))") {
-                    exportText(text, as: format, suffix: exportSuffix)
+                    exportText(text.wrappedValue, as: format, suffix: exportSuffix)
                 }
             }
         } label: {
             Label("Export", systemImage: "square.and.arrow.down")
         }
         .controlSize(.large)
-        .disabled(text.isEmpty)
+        .disabled(text.wrappedValue.isEmpty)
+    }
+
+    @ViewBuilder
+    private func cleanupStatus(for tab: ContentTab) -> some View {
+        if viewModel.isCleaningUp, viewModel.cleaningUpTab == tab, let status = viewModel.cleanupStatusMessage {
+            Text(status)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        if viewModel.cleaningUpTab == tab, let message = viewModel.cleanupErrorMessage {
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(.orange)
+        }
     }
 
     private func detailsCard(_ metadata: TranscriptionMetadata) -> some View {
