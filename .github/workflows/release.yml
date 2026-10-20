@@ -58,40 +58,28 @@ jobs:
           fi
           echo "SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
 
-      # Hardened Runtime (required for notarization) rejects any
-      # dynamically-linked binary not signed by our own team identity --
-      # sign nested dylibs/frameworks/bundles before the main executable and
-      # the app bundle itself, same inside-out order codesign expects. See
+      # A single `--deep` sign of the whole app, rather than pre-signing the
+      # main executable and nested items separately -- confirmed via a real
+      # failed run, not guessed: pre-signing the executable while
+      # scripts/bundle-app.sh's colocated mlx.metallib (see that script's
+      # comment for why it's there) sits next to it makes codesign treat the
+      # metallib as an unsigned "subcomponent" and reject the whole bundle,
+      # even though it's just a resource with no Mach-O in it. `--deep`
+      # signs any genuinely nested code (dylibs/frameworks, none currently)
+      # and seals everything else, including that metallib, as part of the
+      # app's own single signature instead, which plain ad-hoc testing
+      # locally confirmed works end to end (valid signature, and the app
+      # actually launches instead of exiting immediately). Hardened Runtime
+      # is required for notarization; see
       # scripts/AudioTranscriberMac.entitlements for why
-      # disable-library-validation is also needed for this exact class of
-      # dependency.
-      #
-      # Only items that actually contain a Mach-O binary get signed --
-      # confirmed via a real failed run, not guessed: SPM's plain resource
-      # bundles (tokenizer configs, a .wav fixture, even MLX's own
-      # default.metallib, which isn't Mach-O) have no CFBundleExecutable and
-      # codesign rejects them outright ("bundle format unrecognized, invalid,
-      # or unsuitable") when signing with a real Developer ID identity +
-      # --timestamp, even though plain ad-hoc signing them locally raised no
-      # error at all. They don't need their own signature anyway -- the
-      # final whole-app codesign call below seals all resources as part of
-      # its own signature.
+      # disable-library-validation is also needed, given MLX's own compiled
+      # binaries are ad-hoc-signed by a plain `swift build`.
       - name: Code sign app bundle
         run: |
           set -euo pipefail
           APP="dist/Audio Transcriber.app"
 
-          while IFS= read -r -d '' item; do
-            if find "$item" -type f -exec file {} \; | grep -q "Mach-O"; then
-              codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$item"
-            fi
-          done < <(find "$APP" \( -name "*.dylib" -o -name "*.framework" -o -name "*.bundle" \) -print0)
-
-          codesign --force --options runtime --timestamp \
-            --entitlements scripts/AudioTranscriberMac.entitlements \
-            --sign "$SIGNING_IDENTITY" "$APP/Contents/MacOS/AudioTranscriberMac"
-
-          codesign --force --options runtime --timestamp \
+          codesign --force --deep --options runtime --timestamp \
             --entitlements scripts/AudioTranscriberMac.entitlements \
             --sign "$SIGNING_IDENTITY" "$APP"
 

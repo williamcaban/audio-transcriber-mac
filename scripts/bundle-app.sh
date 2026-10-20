@@ -37,4 +37,21 @@ for bundle in "$BIN_PATH"/*.bundle; do
 done
 shopt -u nullglob
 
+# mlx-swift's own metallib loader (mlx/backend/metal/device.cpp) looks for
+# the shader library in a short list of fixed locations, none of which is
+# this bundle's own Contents/Resources -- without this the app launches and
+# immediately exits with "MLX error: Failed to load the default metallib."
+# (never caught before, since `swift run`'s flat build layout, where the
+# executable and its *.bundle resources sit side by side, happens to satisfy
+# one of those locations on its own). The simplest one to satisfy in a real
+# .app is its first: a bare "mlx.metallib" right next to the executable --
+# confirmed by reading mlx-swift's actual source after hitting this for
+# real, not guessed. (A "Resources" subdirectory next to the executable also
+# satisfies the loader, but codesign treats it as a nested component needing
+# its own signature and rejects it as unsigned -- a bare file avoids that.)
+METALLIB=$(find "$APP_BUNDLE/Contents/Resources" -name "default.metallib" | head -1)
+if [ -n "$METALLIB" ]; then
+    cp "$METALLIB" "$APP_BUNDLE/Contents/MacOS/mlx.metallib"
+fi
+
 echo "Built: $APP_BUNDLE"
