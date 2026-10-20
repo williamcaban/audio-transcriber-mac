@@ -21,11 +21,15 @@ jobs:
 
       # A fresh, temporary keychain rather than the runner's default/login
       # keychain, so the imported certificate and its unlock password don't
-      # persist beyond this job.
+      # persist beyond this job. The signing identity string itself (e.g.
+      # "Developer ID Application: William Caban (TEAMID)") is derived from
+      # the imported cert via `security find-identity` rather than taken as
+      # its own secret -- one less value to keep in sync if the cert is ever
+      # renewed.
       - name: Import Developer ID signing certificate
         env:
-          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
         run: |
           set -euo pipefail
           KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
@@ -46,6 +50,14 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
           security default-keychain -s "$KEYCHAIN_PATH"
 
+          SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep "Developer ID Application" | head -1 | sed -n 's/.*"\(.*\)".*/\1/p')
+          if [ -z "$SIGNING_IDENTITY" ]; then
+            echo "No 'Developer ID Application' identity found in the imported certificate." >&2
+            exit 1
+          fi
+          echo "SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
+
       # Hardened Runtime (required for notarization) rejects any
       # dynamically-linked binary not signed by our own team identity --
       # sign nested dylibs/frameworks/bundles (MLX's own compiled Metal
@@ -55,8 +67,6 @@ jobs:
       # disable-library-validation is also needed for this exact class of
       # dependency.
       - name: Code sign app bundle
-        env:
-          SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION_IDENTITY }}
         run: |
           set -euo pipefail
           APP="dist/Audio Transcriber.app"
@@ -76,9 +86,9 @@ jobs:
 
       - name: Notarize app
         env:
-          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_BASE64: ${{ secrets.NOTARY_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/private_keys"
