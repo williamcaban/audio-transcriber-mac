@@ -324,7 +324,10 @@ struct ContentView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .frame(maxWidth: 360)
+        // Sized to its own content rather than a fixed cap -- a hardcoded
+        // width tuned for two segments (its previous value, 360) rendered
+        // the control unevenly once a third tab (Translation) was added.
+        .fixedSize()
     }
 
     private var transcriptTab: some View {
