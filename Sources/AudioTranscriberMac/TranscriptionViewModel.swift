@@ -24,6 +24,11 @@ final class TranscriptionViewModel {
     var reportErrorMessage: String?
     var reportStatusMessage: String?
 
+    var isCleaningUp = false
+    var cleaningUpTab: ContentTab?
+    var cleanupErrorMessage: String?
+    var cleanupStatusMessage: String?
+
     var qwen3LoadState: BackendLoadState = .notLoaded
     var appleLoadState: BackendLoadState = .notLoaded
 
@@ -61,24 +66,6 @@ final class TranscriptionViewModel {
 
     var canTranscribe: Bool {
         selectedFileURL != nil && !isTranscribing && loadState(for: backend) == .ready
-    }
-
-    /// Best-effort BCP-47 code for spell-checking the transcript, honestly
-    /// reflecting what's actually known: Qwen3-ASR's forced language (if
-    /// set) or Apple Native's resolved locale. When Qwen3 is in auto-detect
-    /// mode, there's no real "detected language" to report (the API never
-    /// returns one), so this falls back to the system's current language
-    /// rather than fabricating one.
-    var spellCheckLanguageCode: String? {
-        switch backend {
-        case .qwen3ASR:
-            if let language = qwen3Language {
-                return Qwen3Languages.spellCheckCodes[language]
-            }
-            return Locale.current.language.languageCode?.identifier
-        case .appleNative:
-            return appleLocale.identifier
-        }
     }
 
     func startTranscription() {
@@ -150,6 +137,36 @@ final class TranscriptionViewModel {
             }
             isGeneratingReport = false
             reportStatusMessage = nil
+        }
+    }
+
+    /// Cleans up either tab's text in place via the shared local LLM. Only
+    /// one cleanup runs at a time (the underlying model container is a
+    /// single shared resource); `cleaningUpTab` tracks which tab it applies
+    /// to so the busy spinner and any resulting error show up on the right
+    /// tab's toolbar rather than both.
+    func cleanUp(tab: ContentTab, text: String, apply: @escaping (String) -> Void) {
+        guard !text.isEmpty, !isCleaningUp else { return }
+        isCleaningUp = true
+        cleaningUpTab = tab
+        cleanupErrorMessage = nil
+        cleanupStatusMessage = "Starting..."
+
+        Task {
+            do {
+                let cleaned = try await TextCleanupService.cleanUp(text) { [weak self] message in
+                    Task { @MainActor in self?.cleanupStatusMessage = message }
+                }
+                apply(cleaned)
+            } catch TextCleanupError.cleanupFailed(let message) {
+                cleanupErrorMessage = "Couldn't clean up text: \(message)"
+            } catch is CancellationError {
+                cleanupErrorMessage = nil
+            } catch {
+                cleanupErrorMessage = "Error: \(error)"
+            }
+            isCleaningUp = false
+            cleanupStatusMessage = nil
         }
     }
 
