@@ -15,6 +15,17 @@ jobs:
         run: |
           swift --version
           xcodebuild -version
+      # Xcode 26+ ships the Metal shader compiler as a separate, on-demand
+      # component rather than bundled by default -- without this, MLX's
+      # Metal kernels silently fail to compile into default.metallib (no
+      # build error at all, just a missing bundle), and the app then
+      # crashes on launch with "MLX error: Failed to load the default
+      # metallib." Confirmed by comparing a working local build (toolchain
+      # already had this component) against this runner's, and finding
+      # mlx-swift's own CI explicitly checks for it the same way
+      # (`xcodebuild -showComponent MetalToolchain`).
+      - name: Download Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
       - name: Build
         run: swift build -v
       - name: Build .app bundle
@@ -24,4 +35,21 @@ jobs:
           APP="dist/Audio Transcriber.app"
           test -f "$APP/Contents/MacOS/AudioTranscriberMac"
           test -f "$APP/Contents/Info.plist"
+          test -f "$APP/Contents/MacOS/mlx.metallib"
           plutil -lint "$APP/Contents/Info.plist"
+      # The structure check above only proves the files exist -- this
+      # actually launches the app and confirms it doesn't immediately exit,
+      # which is exactly the failure mode a missing Metal toolchain (or any
+      # other startup crash) causes and the structure check alone can't
+      # catch.
+      - name: Launch smoke test
+        run: |
+          "dist/Audio Transcriber.app/Contents/MacOS/AudioTranscriberMac" > launch.log 2>&1 &
+          PID=$!
+          sleep 5
+          if ! kill -0 $PID 2>/dev/null; then
+            echo "App exited within 5s of launching:"
+            cat launch.log
+            exit 1
+          fi
+          kill $PID

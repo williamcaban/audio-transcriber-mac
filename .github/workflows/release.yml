@@ -16,8 +16,35 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Xcode 26+ ships the Metal shader compiler as a separate, on-demand
+      # component rather than bundled by default -- without this, MLX's
+      # Metal kernels silently fail to compile into default.metallib (no
+      # build error at all, just a missing bundle), and the released app
+      # then crashes on launch with "MLX error: Failed to load the default
+      # metallib." This is exactly what happened to v0.1.0: it built, signed,
+      # and notarized successfully, since none of that touches whether the
+      # metallib was ever produced.
+      - name: Download Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
       - name: Build .app bundle
         run: ./scripts/bundle-app.sh
+
+      # Catches exactly the v0.1.0 failure mode before signing/notarizing/
+      # publishing a broken build: codesigning and notarization both
+      # succeeded for it since neither touches whether the app actually
+      # runs.
+      - name: Launch smoke test
+        run: |
+          "dist/Audio Transcriber.app/Contents/MacOS/AudioTranscriberMac" > launch.log 2>&1 &
+          PID=$!
+          sleep 5
+          if ! kill -0 $PID 2>/dev/null; then
+            echo "App exited within 5s of launching:"
+            cat launch.log
+            exit 1
+          fi
+          kill $PID
 
       # A fresh, temporary keychain rather than the runner's default/login
       # keychain, so the imported certificate and its unlock password don't
