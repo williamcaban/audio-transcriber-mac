@@ -314,22 +314,16 @@ struct ContentView: View {
     }
 
     private var transcriptCard: some View {
-        ScrollView {
-            Text(viewModel.transcript.isEmpty ? "Transcript will appear here." : viewModel.transcript)
-                .textSelection(.enabled)
-                .foregroundStyle(viewModel.transcript.isEmpty ? .secondary : .primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .textBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.2))
-        )
-        .frame(maxHeight: .infinity)
+        SelectableTextView(text: viewModel.transcript, placeholder: "Transcript will appear here.")
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(nsColor: .textBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.secondary.opacity(0.2))
+            )
+            .frame(maxHeight: .infinity)
     }
 
     private func detailsCard(_ metadata: TranscriptionMetadata) -> some View {
