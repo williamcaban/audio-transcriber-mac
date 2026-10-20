@@ -27,8 +27,13 @@ enum ReportGenerator {
     /// chunking shape already used for Qwen3-ASR's fixed audio window,
     /// just applied to this model's (much larger, but still finite)
     /// context window instead.
+    ///
+    /// `language` is the report's own output language, independent of the
+    /// transcript's language -- nil keeps the original behavior of matching
+    /// the source material.
     static func generateReport(
         from transcript: String,
+        language: String? = nil,
         onStatusUpdate: (@Sendable (String) -> Void)? = nil
     ) async throws -> String {
         do {
@@ -45,21 +50,21 @@ enum ReportGenerator {
             let chunks = chunkText(transcript)
             guard chunks.count > 1 else {
                 onStatusUpdate?("Writing report...")
-                return try await writeReport(from: transcript)
+                return try await writeReport(from: transcript, language: language)
             }
 
             var partialSummaries: [String] = []
             for (index, chunk) in chunks.enumerated() {
                 try Task.checkCancellation()
                 onStatusUpdate?("Summarizing part \(index + 1) of \(chunks.count)...")
-                partialSummaries.append(try await summarizeChunk(chunk))
+                partialSummaries.append(try await summarizeChunk(chunk, language: language))
             }
 
             onStatusUpdate?("Combining summaries...")
-            let condensed = try await reduceToFit(partialSummaries)
+            let condensed = try await reduceToFit(partialSummaries, language: language)
 
             onStatusUpdate?("Writing report...")
-            return try await writeReport(from: condensed)
+            return try await writeReport(from: condensed, language: language)
         } catch let error as CancellationError {
             throw error
         } catch {
@@ -74,7 +79,7 @@ enum ReportGenerator {
     /// Combines summaries into text small enough for one final report call,
     /// recursing (summaries-of-summaries) if even the combined text is
     /// still over budget -- needed for very long files with many chunks.
-    private static func reduceToFit(_ summaries: [String]) async throws -> String {
+    private static func reduceToFit(_ summaries: [String], language: String?) async throws -> String {
         let joined = summaries.joined(separator: "\n\n")
         guard joined.count > maxChunkCharacters else { return joined }
 
@@ -83,7 +88,7 @@ enum ReportGenerator {
         var batchLength = 0
         for summary in summaries {
             if batchLength + summary.count > maxChunkCharacters, !batch.isEmpty {
-                nextLevel.append(try await summarizeChunk(batch.joined(separator: "\n\n")))
+                nextLevel.append(try await summarizeChunk(batch.joined(separator: "\n\n"), language: language))
                 batch = []
                 batchLength = 0
             }
@@ -91,31 +96,32 @@ enum ReportGenerator {
             batchLength += summary.count
         }
         if !batch.isEmpty {
-            nextLevel.append(try await summarizeChunk(batch.joined(separator: "\n\n")))
+            nextLevel.append(try await summarizeChunk(batch.joined(separator: "\n\n"), language: language))
         }
-        return try await reduceToFit(nextLevel)
+        return try await reduceToFit(nextLevel, language: language)
     }
 
-    private static func summarizeChunk(_ chunk: String) async throws -> String {
-        try await LocalLLM.respond(
+    private static func summarizeChunk(_ chunk: String, language: String?) async throws -> String {
+        let languageClause = language.map { "in \($0)" } ?? "in the same language as the text"
+        return try await LocalLLM.respond(
             instructions: """
             You extract the key points from part of a longer transcript or \
-            set of summaries. Respond with concise bullet points only, in \
-            the same language as the text. This is only one part of a \
-            larger whole, so don't summarize it as if it were complete on \
-            its own.
+            set of summaries. Respond with concise bullet points only, \
+            \(languageClause). This is only one part of a larger whole, so \
+            don't summarize it as if it were complete on its own.
             """,
             prompt: "Content:\n\(chunk)"
         )
     }
 
-    private static func writeReport(from content: String) async throws -> String {
-        try await LocalLLM.respond(
+    private static func writeReport(from content: String, language: String?) async throws -> String {
+        let languageClause = language.map { "Always respond in \($0), regardless of the source material's language." }
+            ?? "Always respond in the same language as the source material."
+        return try await LocalLLM.respond(
             instructions: """
             You write clear, well-organized prose reports and summaries from \
             spoken-word transcripts -- sermons, classes, movies, reviews, \
-            meetings, and similar recordings. Always respond in the same \
-            language as the source material.
+            meetings, and similar recordings. \(languageClause)
             """,
             prompt: """
             Write a report of the following in two parts, in this order:

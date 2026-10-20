@@ -41,6 +41,29 @@ enum TranslationRunner {
                 .joined(separator: " ")
         } catch let error as CancellationError {
             throw error
+        } catch TranslationError.unsupportedLanguagePairing {
+            // The framework won't translate a language into itself, even
+            // across regional variants (e.g. English to English (UK)) --
+            // confirmed by hitting this for real, not guessed from docs.
+            throw TranslationRunnerError.translationFailed(
+                "The text already appears to be in the selected target language. Pick a different target language."
+            )
+        } catch TranslationError.unsupportedSourceLanguage, TranslationError.unableToIdentifyLanguage {
+            throw TranslationRunnerError.translationFailed("Couldn't identify the source language of this text.")
+        } catch TranslationError.unsupportedTargetLanguage {
+            throw TranslationRunnerError.translationFailed("The selected target language isn't supported for translation.")
+        } catch TranslationError.notInstalled {
+            throw TranslationRunnerError.translationFailed(
+                "The language pack for this translation isn't installed yet. Try again to prompt the download."
+            )
+        } catch let error as TranslationError {
+            // TranslationError's errorDescription isn't always populated;
+            // its raw string form is an unreadable full struct dump, so
+            // fall back to the (also struct-shaped, but at least labeled)
+            // failure reason rather than that.
+            throw TranslationRunnerError.translationFailed(
+                error.errorDescription ?? error.failureReason ?? "Unknown translation error"
+            )
         } catch {
             throw TranslationRunnerError.translationFailed("\(error)")
         }
