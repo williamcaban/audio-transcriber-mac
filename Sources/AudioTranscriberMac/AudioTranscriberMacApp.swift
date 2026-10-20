@@ -16,7 +16,7 @@ struct AudioTranscriberMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        WindowGroup("Audio Transcriber") {
+        WindowGroup("Audio Transcriber \(AppVersion.displayString)") {
             ContentView()
         }
     }

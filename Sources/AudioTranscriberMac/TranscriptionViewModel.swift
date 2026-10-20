@@ -58,6 +58,24 @@ final class TranscriptionViewModel {
         selectedFileURL != nil && !isTranscribing && loadState(for: backend) == .ready
     }
 
+    /// Best-effort BCP-47 code for spell-checking the transcript, honestly
+    /// reflecting what's actually known: Qwen3-ASR's forced language (if
+    /// set) or Apple Native's resolved locale. When Qwen3 is in auto-detect
+    /// mode, there's no real "detected language" to report (the API never
+    /// returns one), so this falls back to the system's current language
+    /// rather than fabricating one.
+    var spellCheckLanguageCode: String? {
+        switch backend {
+        case .qwen3ASR:
+            if let language = qwen3Language {
+                return Qwen3Languages.spellCheckCodes[language]
+            }
+            return Locale.current.language.languageCode?.identifier
+        case .appleNative:
+            return appleLocale.identifier
+        }
+    }
+
     func startTranscription() {
         guard let url = selectedFileURL, !isTranscribing, loadState(for: backend) == .ready else { return }
 
