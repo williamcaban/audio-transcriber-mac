@@ -6,13 +6,30 @@ enum AudioLoaderError: Error {
     case conversionFailed
 }
 
-/// Decodes any AVFoundation-readable audio/video file into mono Float32
-/// PCM samples at the given sample rate -- the raw format Qwen3ASRRuntime's
-/// `transcribe(audio:sampleRate:...)` expects.
-enum AudioLoader {
-    static func loadMonoFloatSamples(url: URL, targetSampleRate: Double = 16000) throws -> [Float] {
-        let file = try AVAudioFile(forReading: url)
-        let sourceFormat = file.processingFormat
+/// Reads and resamples an audio/video file's audio track incrementally, one
+/// bounded chunk at a time, directly off disk -- memory use stays capped at
+/// roughly one chunk's size regardless of how long the source file is.
+///
+/// This replaces an earlier version that decoded the WHOLE file into a
+/// single in-memory Float array before any chunking happened. That worked
+/// for normal-length recordings, but a real ~8GB video file crashed the
+/// app: that single allocation gets into the multi-gigabyte range for a
+/// long enough file, which is usually an unrecoverable OOM kill rather than
+/// a catchable Swift error (hence no clear failure message at the time).
+/// Streaming the decode itself -- not just the 30s chunking Qwen3-ASR's
+/// fixed encoder window already required -- fixes that for files of any
+/// length.
+final class ChunkedAudioReader {
+    private let file: AVAudioFile
+    private let converter: AVAudioConverter
+    private let sourceFormat: AVAudioFormat
+    private let targetFormat: AVAudioFormat
+    private let sourceChunkFrames: AVAudioFrameCount
+    private var reachedEndOfFile = false
+
+    init(url: URL, targetSampleRate: Double = 16000, chunkSeconds: Double = 30) throws {
+        file = try AVAudioFile(forReading: url)
+        sourceFormat = file.processingFormat
 
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -22,19 +39,41 @@ enum AudioLoader {
         ) else {
             throw AudioLoaderError.unsupportedFormat
         }
+        self.targetFormat = targetFormat
 
         guard let converter = AVAudioConverter(from: sourceFormat, to: targetFormat) else {
             throw AudioLoaderError.unsupportedFormat
         }
+        self.converter = converter
+
+        sourceChunkFrames = AVAudioFrameCount(chunkSeconds * sourceFormat.sampleRate)
+    }
+
+    /// Returns the next chunk of mono Float32 samples at the target sample
+    /// rate, or nil once the file is exhausted. The AVAudioConverter is
+    /// reused across calls by design (Apple's documented streaming-
+    /// conversion pattern): besides avoiding per-chunk setup cost, it also
+    /// avoids resampling-edge artifacts a fresh converter per chunk would
+    /// introduce at chunk boundaries.
+    func nextChunk() throws -> [Float]? {
+        guard !reachedEndOfFile else { return nil }
 
         guard let sourceBuffer = AVAudioPCMBuffer(
-            pcmFormat: sourceFormat, frameCapacity: AVAudioFrameCount(file.length)
+            pcmFormat: sourceFormat, frameCapacity: sourceChunkFrames
         ) else {
             throw AudioLoaderError.conversionFailed
         }
-        try file.read(into: sourceBuffer)
+        try file.read(into: sourceBuffer, frameCount: sourceChunkFrames)
 
-        let ratio = targetSampleRate / sourceFormat.sampleRate
+        guard sourceBuffer.frameLength > 0 else {
+            reachedEndOfFile = true
+            return nil
+        }
+        if sourceBuffer.frameLength < sourceChunkFrames {
+            reachedEndOfFile = true
+        }
+
+        let ratio = targetFormat.sampleRate / sourceFormat.sampleRate
         let targetFrameCapacity = AVAudioFrameCount(Double(sourceBuffer.frameLength) * ratio) + 1024
         guard let targetBuffer = AVAudioPCMBuffer(
             pcmFormat: targetFormat, frameCapacity: targetFrameCapacity
@@ -63,25 +102,5 @@ enum AudioLoader {
         }
 
         return Array(UnsafeBufferPointer(start: channelData[0], count: Int(targetBuffer.frameLength)))
-    }
-
-    /// Splits mono samples into fixed-size, non-overlapping chunks. Needed
-    /// for Qwen3-ASR specifically: its audio encoder has a fixed ~30s
-    /// window (same constraint documented in the Python sibling project,
-    /// which is why it also chunks at 30s) -- feeding it a whole long file
-    /// in one call silently produces no usable output once past that
-    /// window, rather than erroring clearly. Apple's SpeechAnalyzer has no
-    /// such limit (it's designed for arbitrary-length streaming input), so
-    /// this is only used on the Qwen3-ASR path.
-    ///
-    /// Non-overlapping chunk boundaries mean a word spanning a boundary can
-    /// come out slightly garbled -- same known, documented tradeoff as the
-    /// Python app's identical chunking approach.
-    static func chunk(_ samples: [Float], bySeconds seconds: Double, sampleRate: Double) -> [[Float]] {
-        let chunkSize = Int(seconds * sampleRate)
-        guard chunkSize > 0, samples.count > chunkSize else { return [samples] }
-        return stride(from: 0, to: samples.count, by: chunkSize).map {
-            Array(samples[$0..<Swift.min($0 + chunkSize, samples.count)])
-        }
     }
 }

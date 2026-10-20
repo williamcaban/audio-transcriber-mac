@@ -193,8 +193,6 @@ final class TranscriptionViewModel {
     }
 
     private func runQwen3(url: URL) async throws -> String {
-        let samples = try AudioLoader.loadMonoFloatSamples(url: url)
-        try Task.checkCancellation()
         guard let runtime = qwen3Runtime else {
             // Shouldn't happen: canTranscribe/startTranscription both gate
             // on loadState == .ready, which is only set once qwen3Runtime
@@ -206,17 +204,23 @@ final class TranscriptionViewModel {
         // Qwen3-ASR's audio encoder has a fixed ~30s window -- sending a
         // whole long file in one call silently produces no usable output
         // past that window rather than erroring clearly, which is exactly
-        // the "transcription completes but nothing is displayed" bug this
-        // chunking fixes. Non-overlapping 30s chunks match the Python
-        // sibling project's identical, documented approach (including its
-        // known tradeoff: a word spanning a chunk boundary can come out
-        // slightly garbled).
-        let chunks = AudioLoader.chunk(samples, bySeconds: 30, sampleRate: 16000)
+        // the "transcription completes but nothing is displayed" bug
+        // chunking originally fixed. ChunkedAudioReader decodes those
+        // non-overlapping 30s chunks directly off disk, one at a time,
+        // rather than materializing the whole file in memory first --
+        // needed after a real crash transcribing a ~8GB video file (same
+        // known boundary-word tradeoff as before, and as the Python sibling
+        // project's identical approach).
+        let reader = try ChunkedAudioReader(url: url)
+        let estimatedTotalChunks = estimatedChunkCount(forFileAt: url)
+
         var combined = ""
-        for (index, chunk) in chunks.enumerated() {
+        var chunkIndex = 0
+        while let chunk = try reader.nextChunk() {
             try Task.checkCancellation()
-            if chunks.count > 1 {
-                statusMessage = "Transcribing part \(index + 1) of \(chunks.count)..."
+            chunkIndex += 1
+            if estimatedTotalChunks > 1 {
+                statusMessage = "Transcribing part \(chunkIndex) of ~\(estimatedTotalChunks)..."
             }
             let text = try await runtime.transcribe(audio: chunk, sampleRate: 16000, language: qwen3Language)
             if !combined.isEmpty, !text.isEmpty {
@@ -225,6 +229,11 @@ final class TranscriptionViewModel {
             combined += text
         }
         return combined
+    }
+
+    private func estimatedChunkCount(forFileAt url: URL) -> Int {
+        guard let info = try? AudioFileInspector.inspect(url: url), info.duration > 0 else { return 1 }
+        return max(1, Int((info.duration / 30).rounded(.up)))
     }
 
     private func runAppleNative(url: URL) async throws -> (text: String, resolvedLocale: Locale) {
