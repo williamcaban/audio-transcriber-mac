@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import Translation
 import UniformTypeIdentifiers
 
 struct ContentView: View {
@@ -43,20 +42,6 @@ struct ContentView: View {
         .onAppear {
             viewModel.loadAvailableAppleLocales()
             viewModel.prepareBackend(viewModel.backend)
-            viewModel.loadAvailableTranslationLanguages()
-        }
-        // Attached at the top level (not inside translationTab) since a
-        // TranslationSession can only be obtained via this modifier, and
-        // it's driven by the view model's configuration regardless of
-        // which tab happens to be visible when it fires. Marked @Sendable
-        // so the closure doesn't inherit this MainActor-isolated View's
-        // isolation (SE-0420) -- without that, `session` is treated as
-        // main-actor-isolated and handing it to `runTranslation` (which
-        // must call TranslationSession's concurrent-executor `translate`)
-        // is flagged as an actual data-race risk, confirmed via a real
-        // compile error, not a style nit.
-        .translationTask(viewModel.translationConfiguration) { @Sendable session in
-            await viewModel.runTranslation(session: session)
         }
         .onChange(of: viewModel.backend) { _, newBackend in
             viewModel.prepareBackend(newBackend)
@@ -449,12 +434,12 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 Picker("Translate to", selection: $viewModel.targetLanguage) {
-                    ForEach(viewModel.availableTranslationLanguages, id: \.self) { language in
-                        Text(viewModel.displayName(for: language)).tag(language)
+                    Text("Select a language").tag(String?.none)
+                    ForEach(Qwen3Languages.all, id: \.self) { language in
+                        Text(language).tag(String?.some(language))
                     }
                 }
                 .frame(maxWidth: 220)
-                .disabled(viewModel.availableTranslationLanguages.isEmpty)
 
                 Button {
                     viewModel.startTranslation()
