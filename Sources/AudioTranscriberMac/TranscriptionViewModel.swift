@@ -141,12 +141,10 @@ final class TranscriptionViewModel {
                         self?.reportStatusMessage = message
                     }
                 }
-            } catch ReportGeneratorError.unavailable(let message) {
-                reportErrorMessage = message
-            } catch ReportGeneratorError.guardrailFlagged {
-                reportErrorMessage = "Apple's on-device safety filter flagged this transcript and couldn't generate a summary. This can happen even with ordinary content -- you can write the summary manually in this tab, or try again."
-            } catch ReportGeneratorError.contentTooLong {
-                reportErrorMessage = "This transcript is too long to summarize, even in parts. Try a shorter recording."
+            } catch ReportGeneratorError.generationFailed(let message) {
+                reportErrorMessage = "Couldn't generate a summary: \(message)"
+            } catch is CancellationError {
+                reportErrorMessage = nil
             } catch {
                 reportErrorMessage = "Error: \(error)"
             }
